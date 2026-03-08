@@ -739,10 +739,9 @@ def main():
         m1.metric("Rows Processed",    f"{total_rows:,}")
         m2.metric("Hours This Period", f"{hours_this_period:,.1f}")
         with m3:
+            st.metric("Utilization Credits", f"{total_credit:,.1f}")
             st.markdown(f"""
-                <div style='font-size:14px;color:#a0a0a0;font-family:Manrope,sans-serif;margin-bottom:4px'>Utilization Credits</div>
-                <div style='font-size:28px;font-weight:700;font-family:Manrope,sans-serif;line-height:1.2'>{total_credit:,.1f}</div>
-                <div style='display:inline-block;margin-top:6px;padding:2px 8px;border-radius:4px;
+                <div style='display:inline-block;margin-top:-12px;padding:2px 10px;border-radius:999px;
                             background-color:{credit_color}33;
                             font-size:13px;font-family:Manrope,sans-serif;color:{credit_color}'>
                     ↑ {credit_pct:.1%} of total hrs · {credit_label}
