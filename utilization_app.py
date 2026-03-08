@@ -14,7 +14,7 @@ from openpyxl.utils import get_column_letter
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Utilization Credit Report",
+    page_title="PS Utilization Credit Report",
     page_icon="📈",
     layout="wide"
 )
@@ -617,9 +617,10 @@ def main():
             h1, h2, h3, .stMarkdown, .stDataFrame, label, button { font-family: 'Manrope', sans-serif !important; }
         </style>
         <div style='background-color:#1e2c63;padding:24px 32px;border-radius:8px;margin-bottom:24px;font-family:Manrope,sans-serif'>
-            <h1 style='color:white;margin:0;font-size:28px;font-family:Manrope,sans-serif'>Utilization Credit Report</h1>
+            <h1 style='color:white;margin:0;font-size:28px;font-family:Manrope,sans-serif'>Professional Services Utilization Credit Report</h1>
             <p style='color:#aac4d0;margin:6px 0 0 0;font-size:14px;font-family:Manrope,sans-serif'>
                 Upload your NetSuite time detail export to generate a utilization credit report.
+                &nbsp;|&nbsp; <a href="REPORT_LINK_PLACEHOLDER" style='color:#7da9f0;font-family:Manrope,sans-serif;'>Report Link</a>
             </p>
         </div>
     """, unsafe_allow_html=True)
