@@ -67,7 +67,9 @@ def auto_detect_columns(df):
         "task":         ["case/task/event", "task", "case", "event", "memo"],
         "non_billable": ["non-billable", "non billable", "nonbillable",
                          "non_billable", "is non billable"],
-        "billing_type": ["billing type", "billing_type", "bill type", "billtype"],
+        "billing_type":   ["billing type", "billing_type", "bill type", "billtype"],
+        "hours_to_date":  ["hours to date", "hours_to_date", "htd", "prior hours",
+                           "cumulative hours", "hours booked to date"],
     }
     mapping = {}
     unmatched = []
@@ -160,6 +162,17 @@ def assign_credits(df, scope_map):
             notes_list.append(f"No scope defined for: {ptype}")
             continue
 
+        # Seed starting balance from hours_to_date if provided and not yet set
+        if proj not in consumed:
+            htd = row.get("hours_to_date", None)
+            if htd is not None and str(htd).strip() not in ("", "nan"):
+                try:
+                    consumed[proj] = float(htd)
+                except (ValueError, TypeError):
+                    consumed[proj] = 0
+            else:
+                consumed[proj] = 0
+
         already = consumed.get(proj, 0)
         remaining = scope_hrs - already
 
@@ -228,12 +241,12 @@ def build_excel(df, scope_map):
     ws.sheet_properties.tabColor = TEAL
     ws.freeze_panes = "A3"
 
-    headers = ["Employee","Project","Project Type","Billing Type","Date","Hours Logged",
-               "Approval","Task/Case","Non-Billable","Credit Hrs",
-               "Variance Hrs","Credit Tag","Period","Notes"]
-    widths  = [20,35,20,14,14,13,14,25,13,12,12,16,12,45]
-    cols    = ["employee","project","project_type","billing_type","date","hours",
-               "approval","task","non_billable","credit_hrs",
+    headers = ["Employee","Project","Project Type","Billing Type","Hrs to Date",
+               "Date","Hours Logged","Approval","Task/Case","Non-Billable",
+               "Credit Hrs","Variance Hrs","Credit Tag","Period","Notes"]
+    widths  = [20,35,20,14,13,14,13,14,25,13,12,12,16,12,45]
+    cols    = ["employee","project","project_type","billing_type","hours_to_date",
+               "date","hours","approval","task","non_billable","credit_hrs",
                "variance_hrs","credit_tag","period","notes"]
 
     write_title(ws, "PROCESSED DATA — Utilization Credit Detail", len(headers))
@@ -252,7 +265,7 @@ def build_excel(df, scope_map):
             align = "left"
             if col == "date" and pd.notna(val):
                 fmt = "YYYY-MM-DD"; align = "center"
-            elif col in ("hours","credit_hrs","variance_hrs"):
+            elif col in ("hours","credit_hrs","variance_hrs","hours_to_date"):
                 fmt = "#,##0.00"; align = "right"
             elif col == "credit_tag":
                 bold = True; align = "center"
@@ -529,8 +542,9 @@ def main():
             st.dataframe(proj_sum, use_container_width=True, hide_index=True)
 
         with tab3:
-            display_cols = ["employee","project","project_type","billing_type","date",
-                            "hours","credit_hrs","variance_hrs","credit_tag","notes"]
+            display_cols = ["employee","project","project_type","billing_type",
+                            "hours_to_date","date","hours","credit_hrs",
+                            "variance_hrs","credit_tag","notes"]
             existing = [c for c in display_cols if c in df.columns]
             st.dataframe(df[existing].head(100), use_container_width=True, hide_index=True)
             if len(df) > 100:
