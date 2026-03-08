@@ -651,7 +651,6 @@ def build_excel(df, scope_map, consumed):
 
         for r_idx, (_, row) in enumerate(cr_sum.iterrows(), 3):
             cr      = row["customer_region"]
-            admin_h = cr_admin_sum.get(cr, 0)
             total_h = row["hours_this_period"]
             util    = row["credit_hrs"] / total_h if total_h > 0 else 0
             util_bg = ("EAF9F1" if util >= 0.8 else "FEF9E7" if util >= 0.6 else "FDECED")
