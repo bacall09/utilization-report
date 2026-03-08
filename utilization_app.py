@@ -325,9 +325,9 @@ def build_excel(df, scope_map, consumed):
     ws2.sheet_properties.tabColor = NAVY
     ws2.freeze_panes = "A3"
 
-    eh = ["Employee","Location","Customer Region","Project Manager","Period",
+    eh = ["Employee","Location","Period",
           "Avail Hrs","Hours This Period","Utilization Credits","FF Project Overrun Hrs","Admin Hrs","Util %"]
-    ew = [22,16,18,20,12,12,15,18,18,14,10]
+    ew = [22,16,12,12,15,18,18,14,10]
     write_title(ws2, "SUMMARY — Utilization by Employee", len(eh))
     style_header(ws2, 2, eh, TEAL)
     for i, w in enumerate(ew, 1):
@@ -370,27 +370,26 @@ def build_excel(df, scope_map, consumed):
         _prev_emp = emp
         util_bg = ("EAF9F1" if util >= 0.8 else "FEF9E7" if util >= 0.6 else "FDECED")
 
-        cust_region = emp_cust_region.get(emp, "")
-        pm          = emp_pm.get(emp, "")
-        vals = [emp, region, cust_region, pm, period, avail or "—",
+        vals = [emp, region, period, avail or "—",
                 row["hours_this_period"], row["credit_hrs"],
                 row["ff_overrun_hrs"], row.get("admin_hrs", 0),
                 util if avail else "—"]
-        fmts = [None,None,None,None,None,"#,##0.00","#,##0.00","#,##0.00","#,##0.00","#,##0.00","0.0%"]
+        fmts = [None,None,None,"#,##0.00","#,##0.00","#,##0.00","#,##0.00","#,##0.00","0.0%"]
 
         for c_idx, (val, fmt) in enumerate(zip(vals, fmts), 1):
             cell = ws2.cell(row=r_idx, column=c_idx, value=val)
-            style_cell(cell, util_bg if c_idx == 11 else bg, fmt=fmt,
-                       align="right" if c_idx > 5 else "center" if c_idx == 5 else "left")
+            style_cell(cell, util_bg if c_idx == 9 else bg, fmt=fmt,
+                       align="right" if c_idx > 3 else "center" if c_idx == 3 else "left")
 
     # ── 3. PROJECT SUMMARY ────────────────────────────────────
     ws3 = wb.create_sheet("SUMMARY - By Project")
     ws3.sheet_properties.tabColor = "E67E22"
     ws3.freeze_panes = "A3"
 
-    ph = ["Project","Project Type","Scoped Hrs","Hours to Date",
-          "Hours This Period","Credit Hrs","Variance Hrs","Updated Hrs to Date","Burn %","Status"]
-    pw = [35,20,12,15,15,12,12,18,10,12]
+    ph = ["Project","Project Type","Customer Region","Project Manager",
+          "Scoped Hrs","Hours to Date","Hours This Period","Credit Hrs",
+          "FF Project Overrun Hrs","Updated Hrs to Date","Burn %","Status"]
+    pw = [35,20,18,20,12,15,15,12,18,18,10,12]
     write_title(ws3, "SUMMARY — Utilization by Project", len(ph))
     style_header(ws3, 2, ph, TEAL)
     for i, w in enumerate(pw, 1):
@@ -413,6 +412,14 @@ def build_excel(df, scope_map, consumed):
 
     # HTD seed now comes directly from aggregation above
     htd_seeds = dict(zip(proj_sum["project"], proj_sum["htd_start"]))
+
+    # Project-level lookups for Customer Region and Project Manager
+    proj_cust_region = {}
+    proj_pm = {}
+    if "customer_region" in df.columns:
+        proj_cust_region = df.dropna(subset=["customer_region"]).groupby("project")["customer_region"].first().to_dict()
+    if "project_manager" in df.columns:
+        proj_pm = df.dropna(subset=["project_manager"]).groupby("project")["project_manager"].first().to_dict()
 
     _prev_ptype = None; _grp_idx_p = 0
     for r_idx, (_, row) in enumerate(proj_sum.iterrows(), 3):
@@ -437,16 +444,18 @@ def build_excel(df, scope_map, consumed):
         bg, _grp_idx_p = group_bg(ptype, _prev_ptype, _grp_idx_p)
         _prev_ptype = ptype
 
-        vals = [row["project"], ptype, scope_h or "—", row["htd_start"],
+        cust_reg = proj_cust_region.get(row["project"], "")
+        pm_name  = proj_pm.get(row["project"], "")
+        vals = [row["project"], ptype, cust_reg, pm_name, scope_h or "—", row["htd_start"],
                 row["hours_this_period"], row["credit_hrs"], vari_h, updated_h,
                 burn if scope_h > 0 else "—", status]
-        fmts = [None,None,"#,##0.00","#,##0.00","#,##0.00","#,##0.00","#,##0.00","#,##0.00","0.0%",None]
+        fmts = [None,None,None,None,"#,##0.00","#,##0.00","#,##0.00","#,##0.00","#,##0.00","#,##0.00","0.0%",None]
 
         for c_idx, (val, fmt) in enumerate(zip(vals, fmts), 1):
             cell = ws3.cell(row=r_idx, column=c_idx, value=val)
-            style_cell(cell, status_bg if c_idx == 10 else bg,
-                       fmt=fmt, bold=(c_idx == 10),
-                       align="right" if c_idx in (3,4,5,6,7,8,9) else "center" if c_idx == 10 else "left")
+            style_cell(cell, status_bg if c_idx == 12 else bg,
+                       fmt=fmt, bold=(c_idx == 12),
+                       align="right" if c_idx in (5,6,7,8,9,10,11) else "center" if c_idx == 12 else "left")
 
     # ── 4. ZCO NON-BILLABLE BREAKDOWN ─────────────────────────
     ws5 = wb.create_sheet("ZCO Non-Billable")
@@ -516,8 +525,9 @@ def build_excel(df, scope_map, consumed):
             hours=("hours","sum"),
         ).sort_values(["ff_task","project_type"])
 
-        # Distinct project count per type (across all tasks) for avg calc
-        proj_count_by_type = ff_df.groupby("project_type")["project"].nunique().to_dict()
+        # Distinct project count per type using ALL fixed fee rows (not just task-tagged rows)
+        all_ff = df[df["billing_type"].str.lower() == "fixed fee"] if "billing_type" in df.columns else df
+        proj_count_by_type = all_ff.groupby("project_type")["project"].nunique().to_dict()
 
         # Total hours per type for % calc
         type_totals = ff_df.groupby("project_type")["hours"].sum().to_dict()
@@ -595,7 +605,55 @@ def build_excel(df, scope_map, consumed):
         if fmt:
             cell.number_format = fmt
 
-    # ── 7. SKIPPED ROWS ──────────────────────────────────────
+    # ── 7. CUSTOMER REGION SUMMARY ───────────────────────────
+    ws_cr = wb.create_sheet("By Customer Region")
+    ws_cr.sheet_properties.tabColor = "1e2c63"
+    ws_cr.freeze_panes = "A3"
+
+    crh = ["Customer Region","Avail Hrs","Hours This Period","Utilization Credits",
+           "FF Project Overrun Hrs","Admin Hrs","Util %"]
+    crw = [22,12,16,18,20,14,10]
+    write_title(ws_cr, "SUMMARY — Utilization by Customer Region", len(crh))
+    style_header(ws_cr, 2, crh, TEAL)
+    for i, w in enumerate(crw, 1):
+        ws_cr.column_dimensions[get_column_letter(i)].width = w
+
+    if "customer_region" in df.columns:
+        cr_base = df[df["credit_tag"] != "SKIPPED"].copy()
+        cr_base["customer_region"] = cr_base["customer_region"].fillna("Unassigned")
+
+        cr_sum = cr_base.groupby("customer_region", as_index=False).agg(
+            hours_this_period=("hours","sum"),
+            credit_hrs=("credit_hrs","sum"),
+            ff_overrun_hrs=("variance_hrs","sum"),
+        ).sort_values("customer_region")
+
+        # Admin hrs per customer region
+        if "billing_type" in df.columns:
+            cr_admin = df[df["billing_type"].str.lower()=="internal"].copy()
+            cr_admin["customer_region"] = cr_admin["customer_region"].fillna("Unassigned") if "customer_region" in cr_admin.columns else "Unassigned"
+            cr_admin_sum = cr_admin.groupby("customer_region")["hours"].sum().to_dict()
+        else:
+            cr_admin_sum = {}
+
+        for r_idx, (_, row) in enumerate(cr_sum.iterrows(), 3):
+            cr      = row["customer_region"]
+            admin_h = cr_admin_sum.get(cr, 0)
+            total_h = row["hours_this_period"]
+            util    = row["credit_hrs"] / total_h if total_h > 0 else 0
+            util_bg = ("EAF9F1" if util >= 0.8 else "FEF9E7" if util >= 0.6 else "FDECED")
+            bg      = bgs[r_idx % 2]
+            vals = [cr, "—", total_h, row["credit_hrs"], row["ff_overrun_hrs"], admin_h,
+                    util if total_h > 0 else "—"]
+            fmts = [None,None,"#,##0.00","#,##0.00","#,##0.00","#,##0.00","0.0%"]
+            for c_idx, (val, fmt) in enumerate(zip(vals, fmts), 1):
+                cell = ws_cr.cell(row=r_idx, column=c_idx, value=val)
+                style_cell(cell, util_bg if c_idx == 7 else bg, fmt=fmt,
+                           align="right" if c_idx > 1 else "left")
+    else:
+        ws_cr.cell(row=3, column=1, value="No 'Customer Region' column found in import.")
+
+    # ── 8. SKIPPED ROWS ──────────────────────────────────────
     ws7 = wb.create_sheet("Skipped Rows")
     ws7.sheet_properties.tabColor = "E74C3C"
     ws7.freeze_panes = "A3"
@@ -625,6 +683,7 @@ def build_excel(df, scope_map, consumed):
         "Project Count",
         "SUMMARY - By Employee",
         "SUMMARY - By Project",
+        "By Customer Region",
         "ZCO Non-Billable",
         "Task Analysis",
         "Skipped Rows",
