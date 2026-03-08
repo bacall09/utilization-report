@@ -595,9 +595,11 @@ def build_excel(df, scope_map, consumed):
         "Skipped Rows",
         "PROCESSED_DATA",
     ]
-    for i, name in enumerate(sheet_order):
-        if name in wb.sheetnames:
-            wb.move_sheet(name, offset=wb.sheetnames.index(name) - i)
+    # Rebuild workbook sheet order directly
+    existing = [s for s in sheet_order if s in wb.sheetnames]
+    # Any sheets not in our list go at the end
+    remaining = [s for s in wb.sheetnames if s not in existing]
+    wb._sheets = [wb[s] for s in existing + remaining]
 
     # Save
     buf = io.BytesIO()
