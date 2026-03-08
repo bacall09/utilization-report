@@ -310,7 +310,7 @@ def build_excel(df, scope_map, consumed):
     ws2.sheet_properties.tabColor = NAVY
     ws2.freeze_panes = "A3"
 
-    eh = ["Employee","Region","Period","Avail Hrs","Hours Booked",
+    eh = ["Employee","Region","Period","Avail Hrs","Hours This Period",
           "Utilization Credits","Project Overrun Hrs","Admin Hrs","Util %"]
     ew = [22,18,12,12,14,18,18,14,10]
     write_title(ws2, "SUMMARY — Utilization by Employee", len(eh))
@@ -330,7 +330,7 @@ def build_excel(df, scope_map, consumed):
     emp_sum = df[df["credit_tag"] != "SKIPPED"].groupby(
         ["employee","period"], as_index=False
     ).agg(
-        hours_booked=("hours","sum"),
+        hours_this_period=("hours","sum"),
         credit_hrs=("credit_hrs","sum"),
         overrun_hrs=("variance_hrs","sum"),
     ).sort_values(["employee","period"])
@@ -348,7 +348,7 @@ def build_excel(df, scope_map, consumed):
         util_bg = ("EAF9F1" if util >= 0.8 else "FEF9E7" if util >= 0.6 else "FDECED")
 
         vals = [emp, region, period, avail or "—",
-                row["hours_booked"], row["credit_hrs"],
+                row["hours_this_period"], row["credit_hrs"],
                 row["overrun_hrs"], row.get("admin_hrs", 0),
                 util if avail else "—"]
         fmts = [None,None,None,"#,##0.00","#,##0.00","#,##0.00","#,##0.00","#,##0.00","0.0%"]
@@ -463,8 +463,8 @@ def build_excel(df, scope_map, consumed):
     ws6.sheet_properties.tabColor = "27AE60"
     ws6.freeze_panes = "A3"
 
-    tah = ["Task Category","Project Type","Hours Booked","% of Type Hrs"]
-    taw = [28,25,14,16]
+    tah = ["Task Category","Project Type","Hours This Period","Avg Hrs / Project","% of Type Hrs"]
+    taw = [28,25,16,18,16]
     write_title(ws6, "TASK ANALYSIS — Hours by Task › Project Type", len(tah))
     style_header(ws6, 2, tah, TEAL)
     for i, w in enumerate(taw, 1):
@@ -477,7 +477,10 @@ def build_excel(df, scope_map, consumed):
     if len(ff_df) > 0:
         task_sum = ff_df.groupby(
             ["ff_task","project_type"], as_index=False
-        ).agg(hours=("hours","sum")).sort_values(["ff_task","project_type"])
+        ).agg(
+            hours=("hours","sum"),
+            project_count=("project","nunique"),
+        ).sort_values(["ff_task","project_type"])
 
         # Total hours per type for % calc
         type_totals = ff_df.groupby("project_type")["hours"].sum().to_dict()
@@ -485,6 +488,10 @@ def build_excel(df, scope_map, consumed):
         for r_idx, (_, row) in enumerate(task_sum.iterrows(), 3):
             type_total = type_totals.get(row["project_type"], 0)
             pct        = row["hours"] / type_total if type_total > 0 else 0
+            proj_cnt   = row["project_count"] if row["project_count"] > 0 else 1
+            raw_avg    = row["hours"] / proj_cnt
+            # Round to nearest .25
+            avg_hrs    = round(raw_avg * 4) / 4
             bg         = bgs[r_idx % 2]
 
             task_colors = {
@@ -495,16 +502,46 @@ def build_excel(df, scope_map, consumed):
             }
             task_bg = task_colors.get(row["ff_task"], bg)
 
-            vals = [row["ff_task"], row["project_type"], row["hours"], pct]
-            fmts = [None, None, "#,##0.00", "0.0%"]
+            vals = [row["ff_task"], row["project_type"], row["hours"], avg_hrs, pct]
+            fmts = [None, None, "#,##0.00", "#,##0.00", "0.0%"]
             for c_idx, (val, fmt) in enumerate(zip(vals, fmts), 1):
                 cell = ws6.cell(row=r_idx, column=c_idx, value=val)
                 style_cell(cell, task_bg if c_idx == 1 else bg, fmt=fmt,
-                           align="right" if c_idx in (3,4) else "left")
+                           align="right" if c_idx in (3,4,5) else "left")
     else:
         ws6.cell(row=3, column=1, value="No Fixed Fee task data found. Check Billing Type and Task/Case columns.")
 
-    # ── 6. SKIPPED ROWS ──────────────────────────────────────
+    # ── 6. PROJECT COUNT BY TYPE ─────────────────────────────
+    ws_pc = wb.create_sheet("Project Count")
+    ws_pc.sheet_properties.tabColor = "2980B9"
+    ws_pc.freeze_panes = "A3"
+
+    pch = ["Project Type","Billing Type","Project Count","Projects"]
+    pcw = [25,14,14,60]
+    write_title(ws_pc, "PROJECT COUNT — Distinct Projects by Type (excl. Internal)", len(pch))
+    style_header(ws_pc, 2, pch, TEAL)
+    for i, w in enumerate(pcw, 1):
+        ws_pc.column_dimensions[get_column_letter(i)].width = w
+
+    # Exclude internal, count distinct projects per type + billing type
+    pc_df = df[df["billing_type"].str.lower() != "internal"].copy()         if "billing_type" in df.columns else df.copy()
+
+    pc_sum = pc_df.groupby(["project_type","billing_type"], as_index=False).agg(
+        project_count=("project","nunique"),
+        projects=("project", lambda x: ", ".join(sorted(x.unique())))
+    ).sort_values(["project_type","billing_type"])
+
+    for r_idx, (_, row) in enumerate(pc_sum.iterrows(), 3):
+        bg   = bgs[r_idx % 2]
+        vals = [row["project_type"], row["billing_type"],
+                row["project_count"], row["projects"]]
+        fmts = [None, None, "#,##0", None]
+        for c_idx, (val, fmt) in enumerate(zip(vals, fmts), 1):
+            cell = ws_pc.cell(row=r_idx, column=c_idx, value=val)
+            style_cell(cell, bg, fmt=fmt,
+                       align="center" if c_idx in (2,3) else "left")
+
+    # ── 7. SKIPPED ROWS ──────────────────────────────────────
     ws7 = wb.create_sheet("Skipped Rows")
     ws7.sheet_properties.tabColor = "E74C3C"
     ws7.freeze_panes = "A3"
@@ -639,7 +676,7 @@ def main():
         with tab1:
             emp_sum = df[df["credit_tag"] != "SKIPPED"].groupby(
                 ["employee","period"], as_index=False
-            ).agg(hours_booked=("hours","sum"), credit_hrs=("credit_hrs","sum"),
+            ).agg(hours_this_period=("hours","sum"), credit_hrs=("credit_hrs","sum"),
                   variance_hrs=("variance_hrs","sum")).sort_values(["employee","period"])
             emp_sum["region"]    = emp_sum["employee"].map(emp_region)
             emp_sum["avail_hrs"] = emp_sum.apply(
@@ -651,14 +688,14 @@ def main():
         with tab2:
             proj_sum = df[df["credit_tag"] != "SKIPPED"].groupby(
                 ["project","project_type"], as_index=False
-            ).agg(hours_booked=("hours","sum"), credit_hrs=("credit_hrs","sum"),
+            ).agg(hours_this_period=("hours","sum"), credit_hrs=("credit_hrs","sum"),
                   variance_hrs=("variance_hrs","sum")).sort_values("project")
             proj_sum["scope_hrs"]  = proj_sum["project_type"].apply(
                 lambda pt: (lambda m: max(m, key=lambda x: len(x[0]))[1] if m else "—")(
                     [(k,v) for k,v in DEFAULT_SCOPE.items() if k.strip().lower() in str(pt).strip().lower()]))
             htd_seeds_ui = df[df["credit_tag"] != "SKIPPED"].groupby("project")["htd_start"].first()
             proj_sum["htd_seed"]    = proj_sum["project"].map(htd_seeds_ui).fillna(0)
-            proj_sum["updated_htd"] = proj_sum["htd_seed"] + proj_sum["hours_booked"]
+            proj_sum["updated_htd"] = proj_sum["htd_seed"] + proj_sum["hours_this_period"]
             proj_sum["burn_pct"]    = proj_sum.apply(
                 lambda r: f"{r['updated_htd']/r['scope_hrs']*100:.1f}%"
                 if isinstance(r["scope_hrs"], (int,float)) and r["scope_hrs"] > 0 else "—", axis=1)
