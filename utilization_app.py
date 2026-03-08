@@ -757,6 +757,10 @@ def main():
         with m4: st.markdown(metric_card("FF Project Overrun Hrs", f"{total_proj_overrun:,.1f}", f"{overrun_pct:.1%} of total hrs", "#ff4b4b"), unsafe_allow_html=True)
         with m5: st.markdown(metric_card("Admin Hrs",              f"{total_admin:,.1f}",     f"{admin_pct:.1%} of total hrs",    "#808495"), unsafe_allow_html=True)
 
+        st.markdown("---")
+        tab1, tab2, tab3, tab4, tab5 = st.tabs(
+            ["By Employee", "By Project", "ZCO Non-Billable", "Task Analysis", "Detail"]
+        )
 
         with tab1:
             _ep = df[df["credit_tag"] != "SKIPPED"]
