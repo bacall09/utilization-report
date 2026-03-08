@@ -31,14 +31,14 @@ TAG_COLORS = {
     "OVERRUN":      "FDECED",
     "PARTIAL":      "FEF9E7",
     "NON-BILLABLE": "EBEDEE",
-    "UNCONFIGURED": "F2F2F2",
+    "FF: NO SCOPE DEFINED": "F2F2F2",
 }
 TAG_BADGE = {
     "CREDITED":     "🟢",
     "OVERRUN":      "🔴",
     "PARTIAL":      "🟡",
     "NON-BILLABLE": "⚫",
-    "UNCONFIGURED": "⚪",
+    "FF: NO SCOPE DEFINED": "⚪",
 }
 
 # ── Stored scope map ──────────────────────────────────────────────────────────
@@ -687,13 +687,14 @@ def build_excel(df, scope_map, consumed):
 
     # Avail hrs per PS region (sum across employees in that region)
     ps_avail = {}
+    _seen_ep = set()
     for emp, grp in df.groupby("employee"):
         loc = emp_region.get(emp, "")
         ps_reg = PS_REGION_MAP.get(loc, "Other")
-        periods = grp["period"].unique()
-        for p in periods:
-            avail = get_avail_hours(loc, p) or 0
-            ps_avail[ps_reg] = ps_avail.get(ps_reg, 0) + avail
+        for p in grp["period"].unique():
+            if (emp, p) not in _seen_ep:
+                _seen_ep.add((emp, p))
+                ps_avail[ps_reg] = ps_avail.get(ps_reg, 0) + (get_avail_hours(loc, p) or 0)
 
     # Admin hrs per PS region
     ps_admin = {}
@@ -780,10 +781,10 @@ def build_excel(df, scope_map, consumed):
                        align="right" if c_idx in (5,6,7,8) else "center" if c_idx == 9 else "left")
         r_idx += 1
 
-    # Section B: UNCONFIGURED projects (no scope defined)
+    # Section B: FF: NO SCOPE DEFINED projects (no scope defined)
     r_idx += 1
     unconf_title_cell = ws_wl.cell(row=r_idx, column=1,
-        value="UNCONFIGURED PROJECTS — No Scope Defined (Hours at Risk)")
+        value="FF: NO SCOPE DEFINED (Hours at Risk)")
     unconf_title_cell.font  = Font(name="Manrope", bold=True, size=11, color="FFFFFF")
     unconf_title_cell.fill  = hdr_fill("E67E22")
     ws_wl.merge_cells(start_row=r_idx, start_column=1, end_row=r_idx, end_column=len(wlh))
@@ -796,7 +797,7 @@ def build_excel(df, scope_map, consumed):
     for _, row in unconf_df.iterrows():
         bg = "FEF3E2"
         vals = [row["project"], row["project_type"], proj_cust_region.get(row["project"],""),
-                proj_pm.get(row["project"],""), "—", "—", "—", row["hours"], "UNCONFIGURED"]
+                proj_pm.get(row["project"],""), "—", "—", "—", row["hours"], "FF: NO SCOPE DEFINED"]
         fmts = [None,None,None,None,None,None,None,"#,##0.00",None]
         for c_idx, (val, fmt) in enumerate(zip(vals, fmts), 1):
             cell = ws_wl.cell(row=r_idx, column=c_idx, value=val)
@@ -923,11 +924,14 @@ def build_excel(df, scope_map, consumed):
         hours=("hours","sum"), credit=("credit_hrs","sum"), overrun=("variance_hrs","sum"))
     ps_admin_d = df[df["billing_type"].str.lower()=="internal"].groupby("ps_region")["hours"].sum() if "billing_type" in df.columns else pd.Series(dtype=float)
     ps_avail_d = {}
+    _seen_emp_period = set()
     for _emp2, _grp2 in df.groupby("employee"):
         _loc2  = emp_region.get(_emp2,"")
         _ps2   = PS_REGION_MAP.get(_loc2,"Other")
         for _p2 in _grp2["period"].unique():
-            ps_avail_d[_ps2] = ps_avail_d.get(_ps2,0) + (get_avail_hours(_loc2,_p2) or 0)
+            if (_emp2, _p2) not in _seen_emp_period:
+                _seen_emp_period.add((_emp2, _p2))
+                ps_avail_d[_ps2] = ps_avail_d.get(_ps2,0) + (get_avail_hours(_loc2,_p2) or 0)
 
     for ri, reg in enumerate(["APAC","EMEA","NOAM","Other"], 11):
         if reg not in ps_sum_d.index: continue
@@ -941,9 +945,10 @@ def build_excel(df, scope_map, consumed):
             (reg,None),(_row["hours"],"#,##0.00"),(_row["credit"],"#,##0.00"),
             (_util,"0.0%"),(_row["overrun"],"#,##0.00"),(_adm,"#,##0.00")], 2):
             _c = ws_dash.cell(row=ri, column=ci2, value=val2)
+            _util_color = "E74C3C" if _util<0.60 else "2ECC71" if _util>=0.70 else "F39C12"
             _c.font = Font(name="Manrope", size=10,
                 bold=(ci2==5),
-                color="E74C3C" if ci2==6 and _util<0.60 else "2ECC71" if ci2==6 and _util>=0.70 else "F39C12" if ci2==6 else "000000")
+                color=_util_color if ci2==5 else "000000")
             _c.fill = PatternFill("solid", fgColor=_bg)
             _c.border = thin_border()
             if fmt2: _c.number_format = fmt2
@@ -959,9 +964,9 @@ def build_excel(df, scope_map, consumed):
 
     for i, (label, value, fmt, status) in enumerate([
         ("Projects in Overrun", n_overrun, "#,##0", "red" if n_overrun>0 else "green"),
-        ("At Risk (≥90% burn)", n_at_risk, "#,##0", "yellow" if n_at_risk>0 else "green"),
-        ("Unconfigured Projects", n_unconf, "#,##0", "yellow" if n_unconf>0 else "green"),
-        ("Unconfigured Hours", unconf_hrs_d, "#,##0.00", "yellow" if unconf_hrs_d>0 else "green"),
+        ("Projects (≥90% burn)", n_at_risk, "#,##0", "yellow" if n_at_risk>0 else "green"),
+        ("FF: No Scope Defined Projects", n_unconf, "#,##0", "yellow" if n_unconf>0 else "green"),
+        ("FF: No Scope Defined Hours", unconf_hrs_d, "#,##0.00", "yellow" if unconf_hrs_d>0 else "green"),
     ]):
         col = 2 + i
         dash_label(ws_dash, 17, col, label)
