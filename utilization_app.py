@@ -738,19 +738,14 @@ def main():
         m1,m2,m3,m4,m5 = st.columns(5)
         m1.metric("Rows Processed",    f"{total_rows:,}")
         m2.metric("Hours This Period", f"{hours_this_period:,.1f}")
+        PILL = "<div style='display:inline-block;margin-top:4px;padding:2px 10px;border-radius:999px;background-color:{bg};font-size:13px;font-family:Manrope,sans-serif;color:{fg}'>↑ {txt}</div>"
+
         with m3:
-            st.metric("Utilization Credits", f"{total_credit:,.1f}")
-            st.markdown(f"""
-                <div style='display:inline-block;margin-top:-12px;padding:2px 10px;border-radius:999px;
-                            background-color:{credit_color}33;
-                            font-size:13px;font-family:Manrope,sans-serif;color:{credit_color}'>
-                    ↑ {credit_pct:.1%} of total hrs · {credit_label}
-                </div>
-            """, unsafe_allow_html=True)
-        m4.metric("Project Overrun Hrs",  f"{total_proj_overrun:,.1f}",
-                  delta=f"{overrun_pct:.1%} of total hrs", delta_color="inverse")
-        m5.metric("Admin Hrs",            f"{total_admin:,.1f}",
-                  delta=f"{admin_pct:.1%} of total hrs", delta_color="off")
+            st.markdown(f"<div style='font-size:14px;color:#a0a0a0;font-family:Manrope,sans-serif'>Utilization Credits</div><div style='font-size:36px;font-weight:700;font-family:Manrope,sans-serif;line-height:1.1'>{total_credit:,.1f}</div>" + PILL.format(bg=credit_color+"33", fg=credit_color, txt=f"{credit_pct:.1%} of total hrs · {credit_label}"), unsafe_allow_html=True)
+        with m4:
+            st.markdown(f"<div style='font-size:14px;color:#a0a0a0;font-family:Manrope,sans-serif'>Project Overrun Hrs</div><div style='font-size:36px;font-weight:700;font-family:Manrope,sans-serif;line-height:1.1'>{total_proj_overrun:,.1f}</div>" + PILL.format(bg="#ff4b4b33", fg="#ff4b4b", txt=f"{overrun_pct:.1%} of total hrs"), unsafe_allow_html=True)
+        with m5:
+            st.markdown(f"<div style='font-size:14px;color:#a0a0a0;font-family:Manrope,sans-serif'>Admin Hrs</div><div style='font-size:36px;font-weight:700;font-family:Manrope,sans-serif;line-height:1.1'>{total_admin:,.1f}</div>" + PILL.format(bg="#80849533", fg="#808495", txt=f"{admin_pct:.1%} of total hrs"), unsafe_allow_html=True)
 
         st.markdown("**Credit Tag Breakdown**")
         tag_counts = df[df["credit_tag"] != "SKIPPED"]["credit_tag"].value_counts()
