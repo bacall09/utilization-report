@@ -302,172 +302,6 @@ def build_excel(df, scope_map, consumed):
     bgs = [WHITE, LTGRAY]
 
     # ── 1. PROCESSED DATA ─────────────────────────────────────
-    # ── DASHBOARD (exec summary) ─────────────────────────────
-    ws_dash = wb.create_sheet("Dashboard")
-    ws_dash.sheet_properties.tabColor = "1e2c63"
-    ws_dash.sheet_view.showGridLines = False
-
-    def dash_label(ws, row, col, text, size=10, bold=False, color="808080"):
-        c = ws.cell(row=row, column=col, value=text)
-        c.font = Font(name="Manrope", size=size, bold=bold, color=color)
-        return c
-
-    def dash_value(ws, row, col, value, fmt=None, size=18, bold=True, color="1e2c63"):
-        c = ws.cell(row=row, column=col, value=value)
-        c.font = Font(name="Manrope", size=size, bold=bold, color=color)
-        if fmt: c.number_format = fmt
-        return c
-
-    def dash_section(ws, row, col, text, ncols=4):
-        c = ws.cell(row=row, column=col, value=text)
-        c.font  = Font(name="Manrope", size=11, bold=True, color="FFFFFF")
-        c.fill  = hdr_fill(NAVY)
-        ws.merge_cells(start_row=row, start_column=col, end_row=row, end_column=col+ncols-1)
-        return c
-
-    def rag_cell(ws, row, col, value, fmt=None, status="green"):
-        colors = {"green":"EAF9F1","yellow":"FEF9E7","red":"FDECED"}
-        txt    = {"green":"2ECC71","yellow":"F39C12","red":"E74C3C"}
-        c = ws.cell(row=row, column=col, value=value)
-        c.font  = Font(name="Manrope", size=14, bold=True, color=txt.get(status,"000000"))
-        c.fill  = PatternFill("solid", fgColor=colors.get(status,"FFFFFF"))
-        c.alignment = Alignment(horizontal="center", vertical="center")
-        if fmt: c.number_format = fmt
-        return c
-
-    for col, w in [(1,3),(2,22),(3,18),(4,18),(5,18),(6,18),(7,18),(8,3)]:
-        ws_dash.column_dimensions[get_column_letter(col)].width = w
-    for row in range(1, 45):
-        ws_dash.row_dimensions[row].height = 18
-
-    # Title
-    tc = ws_dash.cell(row=2, column=2, value="Professional Services — Utilization Credit Report")
-    tc.font = Font(name="Manrope", size=16, bold=True, color="FFFFFF")
-    tc.fill = hdr_fill(NAVY)
-    ws_dash.merge_cells(start_row=2, start_column=2, end_row=2, end_column=7)
-    ws_dash.row_dimensions[2].height = 30
-
-    if "date" in df.columns:
-        max_dt   = pd.to_datetime(df["date"], errors="coerce").max()
-        date_str = max_dt.strftime("%d %B %Y") if pd.notna(max_dt) else "—"
-    else:
-        date_str = "—"
-    sc = ws_dash.cell(row=3, column=2, value=f"Data through {date_str}")
-    sc.font = Font(name="Manrope", size=10, color="808080")
-    ws_dash.merge_cells(start_row=3, start_column=2, end_row=3, end_column=7)
-
-    # Key Metrics
-    dash_section(ws_dash, 5, 2, "KEY METRICS", ncols=6)
-    ws_dash.row_dimensions[5].height = 22
-    hours_tp_d    = df[df["credit_tag"] != "SKIPPED"]["hours"].sum()
-    credit_hrs_d  = df[df["credit_tag"].isin(["CREDITED","PARTIAL"])]["credit_hrs"].sum()
-    overrun_hrs_d = df[df["credit_tag"] == "OVERRUN"]["variance_hrs"].sum()
-    admin_hrs_d   = df[df["billing_type"].str.lower()=="internal"]["hours"].sum() if "billing_type" in df.columns else 0
-    total_rows_d  = len(df[df["credit_tag"] != "SKIPPED"])
-    util_pct_d    = credit_hrs_d / hours_tp_d if hours_tp_d > 0 else 0
-    util_status_d = "green" if util_pct_d >= 0.70 else "yellow" if util_pct_d >= 0.60 else "red"
-
-    for i, (label, value, fmt, status) in enumerate([
-        ("Hours This Period", hours_tp_d, "#,##0.00", None),
-        ("Utilization Credits", credit_hrs_d, "#,##0.00", None),
-        ("Util % (target 70%)", util_pct_d, "0.0%", util_status_d),
-        ("FF Overrun Hrs", overrun_hrs_d, "#,##0.00", None),
-        ("Admin Hrs", admin_hrs_d, "#,##0.00", None),
-        ("Rows Processed", total_rows_d, "#,##0", None),
-    ]):
-        col = 2 + i
-        dash_label(ws_dash, 6, col, label)
-        if status:
-            rag_cell(ws_dash, 7, col, value, fmt=fmt, status=status)
-        else:
-            dash_value(ws_dash, 7, col, value, fmt=fmt, size=14)
-    ws_dash.row_dimensions[7].height = 28
-
-    # PS Region
-    dash_section(ws_dash, 9, 2, "UTILIZATION BY PS REGION", ncols=6)
-    ws_dash.row_dimensions[9].height = 22
-    for ci, hdr in enumerate(["PS Region","Hours This Period","Credit Hrs","Util %","FF Overrun Hrs","Admin Hrs"], 2):
-        c = ws_dash.cell(row=10, column=ci, value=hdr)
-        c.font = Font(name="Manrope", size=9, bold=True, color="FFFFFF")
-        c.fill = hdr_fill(TEAL)
-
-    ps_base_d = df[df["credit_tag"] != "SKIPPED"]
-    ps_sum_d  = ps_base_d.groupby("ps_region").agg(
-        hours=("hours","sum"), credit=("credit_hrs","sum"), overrun=("variance_hrs","sum"))
-    ps_admin_d = df[df["billing_type"].str.lower()=="internal"].groupby("ps_region")["hours"].sum() if "billing_type" in df.columns else pd.Series(dtype=float)
-    ps_avail_d = {}
-    for _emp2, _grp2 in df.groupby("employee"):
-        _loc2  = emp_region.get(_emp2,"")
-        _ps2   = PS_REGION_MAP.get(_loc2,"Other")
-        for _p2 in _grp2["period"].unique():
-            ps_avail_d[_ps2] = ps_avail_d.get(_ps2,0) + (get_avail_hours(_loc2,_p2) or 0)
-
-    for ri, reg in enumerate(["APAC","EMEA","NOAM","Other"], 11):
-        if reg not in ps_sum_d.index: continue
-        _row = ps_sum_d.loc[reg]
-        _adm = float(ps_admin_d.get(reg,0)) if reg in ps_admin_d.index else 0
-        _avl = ps_avail_d.get(reg,0)
-        _util= _row["credit"] / _avl if _avl > 0 else 0
-        _us  = "green" if _util>=0.70 else "yellow" if _util>=0.60 else "red"
-        _bg  = bgs[ri % 2]
-        for ci2, (val2, fmt2) in enumerate([
-            (reg,None),(_row["hours"],"#,##0.00"),(_row["credit"],"#,##0.00"),
-            (_util,"0.0%"),(_row["overrun"],"#,##0.00"),(_adm,"#,##0.00")], 2):
-            _c = ws_dash.cell(row=ri, column=ci2, value=val2)
-            _c.font = Font(name="Manrope", size=10,
-                bold=(ci2==5),
-                color="E74C3C" if ci2==6 and _util<0.60 else "2ECC71" if ci2==6 and _util>=0.70 else "F39C12" if ci2==6 else "000000")
-            _c.fill = PatternFill("solid", fgColor=_bg)
-            _c.border = thin_border()
-            if fmt2: _c.number_format = fmt2
-
-    # Watch List summary
-    dash_section(ws_dash, 16, 2, "WATCH LIST SUMMARY", ncols=6)
-    ws_dash.row_dimensions[16].height = 22
-    n_overrun  = len(df[df["credit_tag"]=="OVERRUN"]["project"].unique())
-    _wl_at_risk = wl_df[(wl_df["burn_pct"].notna()) & (wl_df["burn_pct"]>=0.9) & (wl_df["status"]!="OVERRUN")] if "wl_df" in dir() else pd.DataFrame()
-    n_at_risk  = len(_wl_at_risk["project"].unique()) if len(_wl_at_risk) > 0 else 0
-    n_unconf   = len(df[df["credit_tag"]=="UNCONFIGURED"]["project"].unique())
-    unconf_hrs_d = df[df["credit_tag"]=="UNCONFIGURED"]["hours"].sum()
-
-    for i, (label, value, fmt, status) in enumerate([
-        ("Projects in Overrun", n_overrun, "#,##0", "red" if n_overrun>0 else "green"),
-        ("At Risk (≥90% burn)", n_at_risk, "#,##0", "yellow" if n_at_risk>0 else "green"),
-        ("Unconfigured Projects", n_unconf, "#,##0", "yellow" if n_unconf>0 else "green"),
-        ("Unconfigured Hours", unconf_hrs_d, "#,##0.00", "yellow" if unconf_hrs_d>0 else "green"),
-    ]):
-        col = 2 + i
-        dash_label(ws_dash, 17, col, label)
-        rag_cell(ws_dash, 18, col, value, fmt=fmt, status=status)
-    ws_dash.row_dimensions[18].height = 28
-
-    # Low utilization employees
-    dash_section(ws_dash, 20, 2, "EMPLOYEES BELOW 60% UTILIZATION — Action Required", ncols=6)
-    ws_dash.row_dimensions[20].height = 22
-    for ci, hdr in enumerate(["Employee","Location","PS Region","Period","Util %","Credit Hrs"], 2):
-        _c = ws_dash.cell(row=21, column=ci, value=hdr)
-        _c.font = Font(name="Manrope", size=9, bold=True, color="FFFFFF")
-        _c.fill = hdr_fill(TEAL)
-
-    _low_rows = []
-    for _, _erow in emp_sum.iterrows():
-        _emp3  = _erow["employee"]
-        _loc3  = emp_region.get(_emp3,"")
-        _ps3   = PS_REGION_MAP.get(_loc3,"Other")
-        _p3    = _erow["period"]
-        _avl3  = get_avail_hours(_loc3, _p3) or 0
-        _util3 = _erow["credit_hrs"] / _avl3 if _avl3 > 0 else 0
-        if _util3 < 0.60 and _avl3 > 0:
-            _low_rows.append((_emp3, _loc3, _ps3, _p3, _util3, _erow["credit_hrs"]))
-
-    for ri, (_e,_l,_ps,_per,_u,_c) in enumerate(sorted(_low_rows, key=lambda x:x[4])[:15], 22):
-        for ci2, (val2,fmt2) in enumerate([(_e,None),(_l,None),(_ps,None),(_per,None),(_u,"0.0%"),(_c,"#,##0.00")], 2):
-            _cv = ws_dash.cell(row=ri, column=ci2, value=val2)
-            _cv.font  = Font(name="Manrope", size=10, color="E74C3C" if ci2==6 else "000000")
-            _cv.fill  = PatternFill("solid", fgColor="FDECED")
-            _cv.border = thin_border()
-            if fmt2: _cv.number_format = fmt2
-
 
     ws = wb.create_sheet("PROCESSED_DATA")
     ws.sheet_properties.tabColor = TEAL
@@ -995,6 +829,174 @@ def build_excel(df, scope_map, consumed):
                            align="right" if col == "hours" else "center" if col == "date" else "left")
     else:
         ws7.cell(row=3, column=1, value="No skipped rows — all entries were processed.")
+
+    # ── DASHBOARD (exec summary) ─────────────────────────────
+    ws_dash = wb.create_sheet("Dashboard")
+    ws_dash.sheet_properties.tabColor = "1e2c63"
+    ws_dash.sheet_view.showGridLines = False
+
+    def dash_label(ws, row, col, text, size=10, bold=False, color="808080"):
+        c = ws.cell(row=row, column=col, value=text)
+        c.font = Font(name="Manrope", size=size, bold=bold, color=color)
+        return c
+
+    def dash_value(ws, row, col, value, fmt=None, size=18, bold=True, color="1e2c63"):
+        c = ws.cell(row=row, column=col, value=value)
+        c.font = Font(name="Manrope", size=size, bold=bold, color=color)
+        if fmt: c.number_format = fmt
+        return c
+
+    def dash_section(ws, row, col, text, ncols=4):
+        c = ws.cell(row=row, column=col, value=text)
+        c.font  = Font(name="Manrope", size=11, bold=True, color="FFFFFF")
+        c.fill  = hdr_fill(NAVY)
+        ws.merge_cells(start_row=row, start_column=col, end_row=row, end_column=col+ncols-1)
+        return c
+
+    def rag_cell(ws, row, col, value, fmt=None, status="green"):
+        colors = {"green":"EAF9F1","yellow":"FEF9E7","red":"FDECED"}
+        txt    = {"green":"2ECC71","yellow":"F39C12","red":"E74C3C"}
+        c = ws.cell(row=row, column=col, value=value)
+        c.font  = Font(name="Manrope", size=14, bold=True, color=txt.get(status,"000000"))
+        c.fill  = PatternFill("solid", fgColor=colors.get(status,"FFFFFF"))
+        c.alignment = Alignment(horizontal="center", vertical="center")
+        if fmt: c.number_format = fmt
+        return c
+
+    for col, w in [(1,3),(2,22),(3,18),(4,18),(5,18),(6,18),(7,18),(8,3)]:
+        ws_dash.column_dimensions[get_column_letter(col)].width = w
+    for row in range(1, 45):
+        ws_dash.row_dimensions[row].height = 18
+
+    # Title
+    tc = ws_dash.cell(row=2, column=2, value="Professional Services — Utilization Credit Report")
+    tc.font = Font(name="Manrope", size=16, bold=True, color="FFFFFF")
+    tc.fill = hdr_fill(NAVY)
+    ws_dash.merge_cells(start_row=2, start_column=2, end_row=2, end_column=7)
+    ws_dash.row_dimensions[2].height = 30
+
+    if "date" in df.columns:
+        max_dt   = pd.to_datetime(df["date"], errors="coerce").max()
+        date_str = max_dt.strftime("%d %B %Y") if pd.notna(max_dt) else "—"
+    else:
+        date_str = "—"
+    sc = ws_dash.cell(row=3, column=2, value=f"Data through {date_str}")
+    sc.font = Font(name="Manrope", size=10, color="808080")
+    ws_dash.merge_cells(start_row=3, start_column=2, end_row=3, end_column=7)
+
+    # Key Metrics
+    dash_section(ws_dash, 5, 2, "KEY METRICS", ncols=6)
+    ws_dash.row_dimensions[5].height = 22
+    hours_tp_d    = df[df["credit_tag"] != "SKIPPED"]["hours"].sum()
+    credit_hrs_d  = df[df["credit_tag"].isin(["CREDITED","PARTIAL"])]["credit_hrs"].sum()
+    overrun_hrs_d = df[df["credit_tag"] == "OVERRUN"]["variance_hrs"].sum()
+    admin_hrs_d   = df[df["billing_type"].str.lower()=="internal"]["hours"].sum() if "billing_type" in df.columns else 0
+    total_rows_d  = len(df[df["credit_tag"] != "SKIPPED"])
+    util_pct_d    = credit_hrs_d / hours_tp_d if hours_tp_d > 0 else 0
+    util_status_d = "green" if util_pct_d >= 0.70 else "yellow" if util_pct_d >= 0.60 else "red"
+
+    for i, (label, value, fmt, status) in enumerate([
+        ("Hours This Period", hours_tp_d, "#,##0.00", None),
+        ("Utilization Credits", credit_hrs_d, "#,##0.00", None),
+        ("Util % (target 70%)", util_pct_d, "0.0%", util_status_d),
+        ("FF Overrun Hrs", overrun_hrs_d, "#,##0.00", None),
+        ("Admin Hrs", admin_hrs_d, "#,##0.00", None),
+        ("Rows Processed", total_rows_d, "#,##0", None),
+    ]):
+        col = 2 + i
+        dash_label(ws_dash, 6, col, label)
+        if status:
+            rag_cell(ws_dash, 7, col, value, fmt=fmt, status=status)
+        else:
+            dash_value(ws_dash, 7, col, value, fmt=fmt, size=14)
+    ws_dash.row_dimensions[7].height = 28
+
+    # PS Region
+    dash_section(ws_dash, 9, 2, "UTILIZATION BY PS REGION", ncols=6)
+    ws_dash.row_dimensions[9].height = 22
+    for ci, hdr in enumerate(["PS Region","Hours This Period","Credit Hrs","Util %","FF Overrun Hrs","Admin Hrs"], 2):
+        c = ws_dash.cell(row=10, column=ci, value=hdr)
+        c.font = Font(name="Manrope", size=9, bold=True, color="FFFFFF")
+        c.fill = hdr_fill(TEAL)
+
+    ps_base_d = df[df["credit_tag"] != "SKIPPED"]
+    ps_sum_d  = ps_base_d.groupby("ps_region").agg(
+        hours=("hours","sum"), credit=("credit_hrs","sum"), overrun=("variance_hrs","sum"))
+    ps_admin_d = df[df["billing_type"].str.lower()=="internal"].groupby("ps_region")["hours"].sum() if "billing_type" in df.columns else pd.Series(dtype=float)
+    ps_avail_d = {}
+    for _emp2, _grp2 in df.groupby("employee"):
+        _loc2  = emp_region.get(_emp2,"")
+        _ps2   = PS_REGION_MAP.get(_loc2,"Other")
+        for _p2 in _grp2["period"].unique():
+            ps_avail_d[_ps2] = ps_avail_d.get(_ps2,0) + (get_avail_hours(_loc2,_p2) or 0)
+
+    for ri, reg in enumerate(["APAC","EMEA","NOAM","Other"], 11):
+        if reg not in ps_sum_d.index: continue
+        _row = ps_sum_d.loc[reg]
+        _adm = float(ps_admin_d.get(reg,0)) if reg in ps_admin_d.index else 0
+        _avl = ps_avail_d.get(reg,0)
+        _util= _row["credit"] / _avl if _avl > 0 else 0
+        _us  = "green" if _util>=0.70 else "yellow" if _util>=0.60 else "red"
+        _bg  = bgs[ri % 2]
+        for ci2, (val2, fmt2) in enumerate([
+            (reg,None),(_row["hours"],"#,##0.00"),(_row["credit"],"#,##0.00"),
+            (_util,"0.0%"),(_row["overrun"],"#,##0.00"),(_adm,"#,##0.00")], 2):
+            _c = ws_dash.cell(row=ri, column=ci2, value=val2)
+            _c.font = Font(name="Manrope", size=10,
+                bold=(ci2==5),
+                color="E74C3C" if ci2==6 and _util<0.60 else "2ECC71" if ci2==6 and _util>=0.70 else "F39C12" if ci2==6 else "000000")
+            _c.fill = PatternFill("solid", fgColor=_bg)
+            _c.border = thin_border()
+            if fmt2: _c.number_format = fmt2
+
+    # Watch List summary
+    dash_section(ws_dash, 16, 2, "WATCH LIST SUMMARY", ncols=6)
+    ws_dash.row_dimensions[16].height = 22
+    n_overrun  = len(df[df["credit_tag"]=="OVERRUN"]["project"].unique())
+    _wl_at_risk = wl_df[(wl_df["burn_pct"].notna()) & (wl_df["burn_pct"]>=0.9) & (wl_df["status"]!="OVERRUN")] if "wl_df" in dir() else pd.DataFrame()
+    n_at_risk  = len(_wl_at_risk["project"].unique()) if len(_wl_at_risk) > 0 else 0
+    n_unconf   = len(df[df["credit_tag"]=="UNCONFIGURED"]["project"].unique())
+    unconf_hrs_d = df[df["credit_tag"]=="UNCONFIGURED"]["hours"].sum()
+
+    for i, (label, value, fmt, status) in enumerate([
+        ("Projects in Overrun", n_overrun, "#,##0", "red" if n_overrun>0 else "green"),
+        ("At Risk (≥90% burn)", n_at_risk, "#,##0", "yellow" if n_at_risk>0 else "green"),
+        ("Unconfigured Projects", n_unconf, "#,##0", "yellow" if n_unconf>0 else "green"),
+        ("Unconfigured Hours", unconf_hrs_d, "#,##0.00", "yellow" if unconf_hrs_d>0 else "green"),
+    ]):
+        col = 2 + i
+        dash_label(ws_dash, 17, col, label)
+        rag_cell(ws_dash, 18, col, value, fmt=fmt, status=status)
+    ws_dash.row_dimensions[18].height = 28
+
+    # Low utilization employees
+    dash_section(ws_dash, 20, 2, "EMPLOYEES BELOW 60% UTILIZATION — Action Required", ncols=6)
+    ws_dash.row_dimensions[20].height = 22
+    for ci, hdr in enumerate(["Employee","Location","PS Region","Period","Util %","Credit Hrs"], 2):
+        _c = ws_dash.cell(row=21, column=ci, value=hdr)
+        _c.font = Font(name="Manrope", size=9, bold=True, color="FFFFFF")
+        _c.fill = hdr_fill(TEAL)
+
+    _low_rows = []
+    for _, _erow in emp_sum.iterrows():
+        _emp3  = _erow["employee"]
+        _loc3  = emp_region.get(_emp3,"")
+        _ps3   = PS_REGION_MAP.get(_loc3,"Other")
+        _p3    = _erow["period"]
+        _avl3  = get_avail_hours(_loc3, _p3) or 0
+        _util3 = _erow["credit_hrs"] / _avl3 if _avl3 > 0 else 0
+        if _util3 < 0.60 and _avl3 > 0:
+            _low_rows.append((_emp3, _loc3, _ps3, _p3, _util3, _erow["credit_hrs"]))
+
+    for ri, (_e,_l,_ps,_per,_u,_c) in enumerate(sorted(_low_rows, key=lambda x:x[4])[:15], 22):
+        for ci2, (val2,fmt2) in enumerate([(_e,None),(_l,None),(_ps,None),(_per,None),(_u,"0.0%"),(_c,"#,##0.00")], 2):
+            _cv = ws_dash.cell(row=ri, column=ci2, value=val2)
+            _cv.font  = Font(name="Manrope", size=10, color="E74C3C" if ci2==6 else "000000")
+            _cv.fill  = PatternFill("solid", fgColor="FDECED")
+            _cv.border = thin_border()
+            if fmt2: _cv.number_format = fmt2
+
+
 
     # ── Reorder sheets: Project Count first, Processed Data last ────────────
     sheet_order = [
