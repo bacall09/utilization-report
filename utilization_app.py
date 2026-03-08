@@ -671,59 +671,113 @@ def build_excel(df, scope_map, consumed):
     # ── 8. PS REGION SUMMARY ─────────────────────────────────
     ws_ps = wb.create_sheet("By PS Region")
     ws_ps.sheet_properties.tabColor = "4472C4"
-    ws_ps.freeze_panes = "A3"
+    ws_ps.freeze_panes = "A4"
 
-    psh = ["PS Region","Avail Hrs","Hours This Period","Utilization Credits",
+    psh = ["PS Region","Project Type","Billing Type",
+           "Avail Hrs","Hours This Period","Utilization Credits",
            "FF Project Overrun Hrs","Admin Hrs","Util %"]
-    psw = [14,12,16,18,20,14,10]
+    psw = [14,28,14,12,16,18,20,14,10]
     write_title(ws_ps, "SUMMARY — Utilization by PS Region (APAC / EMEA / NOAM)", len(psh))
     style_header(ws_ps, 2, psh, TEAL)
+    # Sub-header note
+    ws_ps.cell(row=3, column=1,
+        value="Grouped by PS Region → Project Type → Billing Type").font = Font(
+        name="Manrope", size=9, italic=True, color="808080")
     for i, w in enumerate(psw, 1):
         ws_ps.column_dimensions[get_column_letter(i)].width = w
 
-    ps_base = df[df["credit_tag"] != "SKIPPED"].copy()
-    ps_sum = ps_base.groupby("ps_region", as_index=False).agg(
+    # Avail hrs per region (unique employee+period)
+    ps_avail = {}
+    _seen_ep = set()
+    for _emp, _grp in df.groupby("employee"):
+        _loc  = emp_region.get(_emp, "")
+        _ps   = PS_REGION_MAP.get(_loc, "Other")
+        for _p in _grp["period"].unique():
+            if (_emp, _p) not in _seen_ep:
+                _seen_ep.add((_emp, _p))
+                ps_avail[_ps] = ps_avail.get(_ps, 0) + (get_avail_hours(_loc, _p) or 0)
+
+    # Admin hrs per region
+    ps_admin = {}
+    if "billing_type" in df.columns:
+        for _, _ar in df[df["billing_type"].str.lower()=="internal"].iterrows():
+            _ps = PS_REGION_MAP.get(_ar.get("region",""), "Other")
+            ps_admin[_ps] = ps_admin.get(_ps, 0) + _ar.get("hours", 0)
+
+    # Build 3-level aggregation
+    _ps_base = df[df["credit_tag"] != "SKIPPED"].copy()
+    if "billing_type" not in _ps_base.columns:
+        _ps_base["billing_type"] = "Unknown"
+    _ps_detail = _ps_base.groupby(
+        ["ps_region","project_type","billing_type"], as_index=False
+    ).agg(
         hours_this_period=("hours","sum"),
         credit_hrs=("credit_hrs","sum"),
         ff_overrun_hrs=("variance_hrs","sum"),
-    ).sort_values("ps_region")
+    )
 
-    # Avail hrs per PS region (sum across employees in that region)
-    ps_avail = {}
-    _seen_ep = set()
-    for emp, grp in df.groupby("employee"):
-        loc = emp_region.get(emp, "")
-        ps_reg = PS_REGION_MAP.get(loc, "Other")
-        for p in grp["period"].unique():
-            if (emp, p) not in _seen_ep:
-                _seen_ep.add((emp, p))
-                ps_avail[ps_reg] = ps_avail.get(ps_reg, 0) + (get_avail_hours(loc, p) or 0)
-
-    # Admin hrs per PS region
-    ps_admin = {}
-    if "billing_type" in df.columns:
-        for _, row in df[df["billing_type"].str.lower()=="internal"].iterrows():
-            ps_reg = PS_REGION_MAP.get(row.get("region",""), "Other")
-            ps_admin[ps_reg] = ps_admin.get(ps_reg, 0) + row.get("hours", 0)
+    # Region subtotals
+    _ps_reg_total = _ps_base.groupby("ps_region", as_index=False).agg(
+        hours_this_period=("hours","sum"),
+        credit_hrs=("credit_hrs","sum"),
+        ff_overrun_hrs=("variance_hrs","sum"),
+    )
 
     region_order = ["APAC","EMEA","NOAM","Other"]
-    ps_sum["_order"] = ps_sum["ps_region"].map({r:i for i,r in enumerate(region_order)}).fillna(99)
-    ps_sum = ps_sum.sort_values("_order").drop(columns=["_order"])
+    _ps_detail["_rord"] = _ps_detail["ps_region"].map(
+        {r:i for i,r in enumerate(region_order)}).fillna(99)
+    _ps_detail = _ps_detail.sort_values(
+        ["_rord","ps_region","project_type","billing_type"]).drop(columns=["_rord"])
 
-    for r_idx, (_, row) in enumerate(ps_sum.iterrows(), 3):
-        ps_reg  = row["ps_region"]
-        avail_h = ps_avail.get(ps_reg)
-        admin_h = ps_admin.get(ps_reg, 0)
-        util    = row["credit_hrs"] / row["hours_this_period"] if row["hours_this_period"] > 0 else 0
-        util_bg = ("EAF9F1" if util >= 0.8 else "FEF9E7" if util >= 0.6 else "FDECED")
-        bg      = bgs[r_idx % 2]
-        vals    = [ps_reg, avail_h or "—", row["hours_this_period"], row["credit_hrs"],
-                   row["ff_overrun_hrs"], admin_h, util if avail_h else "—"]
-        fmts    = [None,"#,##0.00","#,##0.00","#,##0.00","#,##0.00","#,##0.00","0.0%"]
+    r_idx = 4
+    _last_region = None
+    for _, row in _ps_detail.iterrows():
+        ps_reg = row["ps_region"]
+
+        # ── Region header row ──────────────────────────────────
+        if ps_reg != _last_region:
+            _last_region = ps_reg
+            _rt = _ps_reg_total[_ps_reg_total["ps_region"]==ps_reg]
+            _rh = _rt.iloc[0]["hours_this_period"] if len(_rt) else 0
+            _rc = _rt.iloc[0]["credit_hrs"]         if len(_rt) else 0
+            _ro = _rt.iloc[0]["ff_overrun_hrs"]     if len(_rt) else 0
+            _ra = ps_admin.get(ps_reg, 0)
+            _rv = ps_avail.get(ps_reg, 0)
+            _ru = _rc / _rh if _rh > 0 else 0
+            _ru_bg = "EAF9F1" if _ru>=0.7 else "FEF9E7" if _ru>=0.6 else "FDECED"
+
+            reg_vals = [ps_reg, "— ALL TYPES —", "",
+                        _rv or "—", _rh, _rc, _ro, _ra,
+                        _ru if _rh > 0 else "—"]
+            reg_fmts = [None,None,None,"#,##0.00","#,##0.00","#,##0.00","#,##0.00","#,##0.00","0.0%"]
+            for c_idx, (val, fmt) in enumerate(zip(reg_vals, reg_fmts), 1):
+                cell = ws_ps.cell(row=r_idx, column=c_idx, value=val)
+                cell.font  = Font(name="Manrope", size=10, bold=True,
+                                  color="FFFFFF" if c_idx <= 2 else "000000")
+                cell.fill  = PatternFill("solid", fgColor=NAVY if c_idx <= 2 else (
+                                  _ru_bg if c_idx == 9 else "D6DCF0"))
+                cell.border = thin_border()
+                if fmt: cell.number_format = fmt
+                cell.alignment = Alignment(horizontal="right" if c_idx > 3 else "left",
+                                           vertical="center")
+            r_idx += 1
+
+        # ── Detail row ─────────────────────────────────────────
+        hrs  = row["hours_this_period"]
+        util = row["credit_hrs"] / hrs if hrs > 0 else 0
+        util_bg = "EAF9F1" if util >= 0.7 else "FEF9E7" if util >= 0.6 else "FDECED"
+        bg = bgs[r_idx % 2]
+
+        vals = ["", row["project_type"], row["billing_type"],
+                "", hrs, row["credit_hrs"], row["ff_overrun_hrs"], "",
+                util if hrs > 0 else "—"]
+        fmts = [None,None,None,None,"#,##0.00","#,##0.00","#,##0.00",None,"0.0%"]
         for c_idx, (val, fmt) in enumerate(zip(vals, fmts), 1):
             cell = ws_ps.cell(row=r_idx, column=c_idx, value=val)
-            style_cell(cell, util_bg if c_idx == 7 else bg, fmt=fmt,
-                       align="right" if c_idx > 1 else "left")
+            style_cell(cell, util_bg if c_idx == 9 else bg, fmt=fmt,
+                       align="right" if c_idx > 3 else "left")
+        r_idx += 1
+
 
     # ── 9. PROJECT WATCH LIST ────────────────────────────────
     ws_wl = wb.create_sheet("Watch List")
