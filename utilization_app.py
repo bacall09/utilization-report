@@ -70,6 +70,8 @@ AVAIL_HOURS = {
     "Serbia":           {"2026-01":152.00,"2026-02":152.00,"2026-03":176.00,"2026-04":160.00,"2026-05":160.00,"2026-06":176.00,"2026-07":184.00,"2026-08":168.00,"2026-09":176.00,"2026-10":176.00,"2026-11":160.00,"2026-12":184.00},
     "Canada":           {"2026-01":168.00,"2026-02":160.00,"2026-03":176.00,"2026-04":168.00,"2026-05":160.00,"2026-06":176.00,"2026-07":176.00,"2026-08":160.00,"2026-09":160.00,"2026-10":168.00,"2026-11":160.00,"2026-12":168.00},
     "USA":              {"2026-01":160.00,"2026-02":152.00,"2026-03":176.00,"2026-04":176.00,"2026-05":160.00,"2026-06":168.00,"2026-07":176.00,"2026-08":168.00,"2026-09":168.00,"2026-10":168.00,"2026-11":152.00,"2026-12":176.00},
+    "Sydney (NSW)":     {"2026-01":152.00,"2026-02":152.00,"2026-03":167.20,"2026-04":144.40,"2026-05":159.60,"2026-06":159.60,"2026-07":174.80,"2026-08":152.00,"2026-09":167.20,"2026-10":159.60,"2026-11":159.60,"2026-12":159.60},
+    "Manila (PH)":      {"2026-01":168.00,"2026-02":152.00,"2026-03":176.00,"2026-04":152.00,"2026-05":160.00,"2026-06":168.00,"2026-07":184.00,"2026-08":152.00,"2026-09":176.00,"2026-10":176.00,"2026-11":152.00,"2026-12":144.00},
 }
 
 # Fixed fee task keywords (Case/Task/Event column)
@@ -180,7 +182,6 @@ def assign_credits(df, scope_map):
         ptype     = str(row.get("project_type", "")).strip()
         hrs       = float(row.get("hours", 0))
         nb        = str(row.get("non_billable", "NO")).strip().upper()
-        is_zco    = "ZCO" in ptype.upper()
         bill_type = str(row.get("billing_type", "")).strip().lower()
         is_tm     = bill_type == "t&m"
 
@@ -190,28 +191,21 @@ def assign_credits(df, scope_map):
             htd_start_list.append(0)
             continue
 
-        # Rule 1: NB + ZCO = excluded
-        if nb == "YES" and is_zco:
+        # Rule 1: Internal = always 0 credit
+        if bill_type == "internal":
             credit_hrs_list.append(0); variance_hrs_list.append(0)
-            credit_tag_list.append("NON-BILLABLE"); notes_list.append("Excluded: ZCO Internal Project")
+            credit_tag_list.append("NON-BILLABLE"); notes_list.append("Internal: excluded from utilization")
             htd_start_list.append(0)
             continue
 
-        # Rule 2: T&M = always full credit
+        # Rule 2: T&M = always full credit, no cap
         if is_tm:
             credit_hrs_list.append(hrs); variance_hrs_list.append(0)
             credit_tag_list.append("CREDITED"); notes_list.append("T&M: full credit")
             htd_start_list.append(0)
             continue
 
-        # Rule 3: Billable (NB=No) = full credit
-        if nb == "NO":
-            credit_hrs_list.append(hrs); variance_hrs_list.append(0)
-            credit_tag_list.append("CREDITED"); notes_list.append("Billable: full credit")
-            htd_start_list.append(0)
-            continue
-
-        # Rule 4: NB non-ZCO Fixed Fee = capped at scope (longest match wins)
+        # Rule 3: Fixed Fee = capped at scope (longest match wins)
         _ptype_lower = ptype.strip().lower()
         _matches = [(k, float(v)) for k, v in scope_map.items()
                     if k.strip().lower() in _ptype_lower]
@@ -219,7 +213,7 @@ def assign_credits(df, scope_map):
 
         if scope_hrs is None:
             credit_hrs_list.append(0); variance_hrs_list.append(hrs)
-            credit_tag_list.append("UNCONFIGURED"); notes_list.append(f"No scope defined for: {ptype}")
+            credit_tag_list.append("UNCONFIGURED"); notes_list.append(f"Fixed Fee but no scope defined for: {ptype}")
             htd_start_list.append(0)
             continue
 
