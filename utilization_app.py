@@ -176,6 +176,9 @@ def assign_credits(df, scope_map):
 
     df = df.rename(columns=col_map)
     df["non_billable"] = df["non_billable"].astype(str).str.strip().str.upper()
+    # Normalize project names — collapse internal whitespace and strip edges
+    if "project" in df.columns:
+        df["project"] = df["project"].astype(str).str.strip().str.replace(r'\s+', ' ', regex=True)
     df["hours"]  = pd.to_numeric(df["hours"], errors="coerce").fillna(0)
     df["date"]   = pd.to_datetime(df["date"], errors="coerce")
     df["period"] = df["date"].dt.strftime("%Y-%m").fillna("Unknown")
@@ -188,7 +191,7 @@ def assign_credits(df, scope_map):
     htd_start_list     = []  # track starting HTD per row for output
 
     for _, row in df.iterrows():
-        proj      = str(row.get("project", "")).strip()
+        proj      = " ".join(str(row.get("project", "")).split())  # normalize whitespace
         ptype     = str(row.get("project_type", "")).strip()
         hrs       = float(row.get("hours", 0))
         nb        = str(row.get("non_billable", "NO")).strip().upper()
@@ -553,32 +556,44 @@ def build_excel(df, scope_map, consumed):
     ws_pc.sheet_properties.tabColor = "2980B9"
     ws_pc.freeze_panes = "A3"
 
-    pch = ["Project Type","Billing Type","Project Count","Projects"]
-    pcw = [25,14,14,60]
+    pch = ["Project Type","Billing Type","Project Count"]
+    pcw = [35, 14, 14]
     write_title(ws_pc, "PROJECT COUNT — Distinct Projects by Type (excl. Internal)", len(pch))
     style_header(ws_pc, 2, pch, TEAL)
     for i, w in enumerate(pcw, 1):
         ws_pc.column_dimensions[get_column_letter(i)].width = w
 
-    # Exclude internal, count distinct projects per type + billing type
+    # Exclude internal, count distinct projects per type only
     pc_df = df[df["billing_type"].str.lower() != "internal"].copy()         if "billing_type" in df.columns else df.copy()
 
     pc_sum = pc_df.groupby(["project_type","billing_type"], as_index=False).agg(
         project_count=("project","nunique"),
-        projects=("project", lambda x: ", ".join(sorted(x.unique())))
     ).sort_values(["project_type","billing_type"])
 
-    _prev_ptype_pc = None; _grp_idx_pc = 0
+    grand_total = pc_sum["project_count"].sum()
+
     for r_idx, (_, row) in enumerate(pc_sum.iterrows(), 3):
-        bg, _grp_idx_pc = group_bg(row["project_type"], _prev_ptype_pc, _grp_idx_pc)
-        _prev_ptype_pc = row["project_type"]
-        vals = [row["project_type"], row["billing_type"],
-                row["project_count"], row["projects"]]
-        fmts = [None, None, "#,##0", None]
+        bg = LTGRAY if r_idx % 2 == 0 else WHITE
+        vals = [row["project_type"], row["billing_type"], row["project_count"]]
+        fmts = [None, None, "#,##0"]
         for c_idx, (val, fmt) in enumerate(zip(vals, fmts), 1):
             cell = ws_pc.cell(row=r_idx, column=c_idx, value=val)
-            style_cell(cell, bg, fmt=fmt,
-                       align="center" if c_idx in (2,3) else "left")
+            style_cell(cell, bg, fmt=fmt, align="center" if c_idx == 2 else "right" if c_idx == 3 else "left")
+
+    # Grand total row
+    total_row = r_idx + 1 if len(pc_sum) > 0 else 3
+    for c_idx, (val, fmt, bold) in enumerate([
+        ("Grand Total", None, True),
+        ("", None, False),
+        (grand_total, "#,##0", True),
+    ], 1):
+        cell = ws_pc.cell(row=total_row, column=c_idx, value=val)
+        cell.font   = Font(name="Manrope", bold=True, size=10, color=WHITE)
+        cell.fill   = hdr_fill(NAVY)
+        cell.border = thin_border()
+        cell.alignment = Alignment(horizontal="right" if c_idx == 2 else "left", vertical="center")
+        if fmt:
+            cell.number_format = fmt
 
     # ── 7. SKIPPED ROWS ──────────────────────────────────────
     ws7 = wb.create_sheet("Skipped Rows")
@@ -709,13 +724,16 @@ def main():
         total_variance = df["variance_hrs"].sum()
         total_nb       = len(df[df["credit_tag"] == "NON-BILLABLE"])
         total_overrun  = len(df[df["credit_tag"] == "OVERRUN"])
+        hours_this_period = df[df["credit_tag"] != "SKIPPED"]["hours"].sum() if "hours" in df.columns else 0
+        total_admin    = df[df["billing_type"].str.lower() == "internal"]["hours"].sum()             if "billing_type" in df.columns else 0
+        total_proj_overrun = df[df["credit_tag"] == "OVERRUN"]["variance_hrs"].sum()             if "variance_hrs" in df.columns else 0
 
         m1,m2,m3,m4,m5 = st.columns(5)
-        m1.metric("Rows Processed",   f"{total_rows:,}")
-        m2.metric("Total Credit Hrs", f"{total_credit:,.1f}")
-        m3.metric("Variance Hrs",     f"{total_variance:,.1f}")
-        m4.metric("Non-Billable Rows",f"{total_nb:,}")
-        m5.metric("Overrun Rows",     f"{total_overrun:,}")
+        m1.metric("Rows Processed",          f"{total_rows:,}")
+        m2.metric("Hours This Period",        f"{hours_this_period:,.1f}")
+        m3.metric("Utilization Credits",      f"{total_credit:,.1f}")
+        m4.metric("Project Overrun Hrs",      f"{total_proj_overrun:,.1f}")
+        m5.metric("Admin Hrs",                f"{total_admin:,.1f}")
 
         st.markdown("**Credit Tag Breakdown**")
         tag_counts = df[df["credit_tag"] != "SKIPPED"]["credit_tag"].value_counts()
