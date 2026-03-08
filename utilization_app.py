@@ -254,8 +254,8 @@ def assign_credits(df, scope_map):
     df["notes"]         = notes_list
     df["htd_start"]     = htd_start_list
 
-    # Updated hours to date = htd_start + credit_hrs (running total after this period)
-    df["updated_htd"] = df["htd_start"] + df["credit_hrs"]
+    # Updated hours to date = htd_start + total hours booked this period (credited + overrun)
+    df["updated_htd"] = df["htd_start"] + df["hours"]
 
     # Tag FF tasks
     df["ff_task"] = df["task"].apply(match_ff_task) if "task" in df.columns else None
@@ -374,16 +374,23 @@ def build_excel(df, scope_map, consumed):
         variance_hrs=("variance_hrs","sum"),
     ).sort_values("project")
 
+    # Compute HTD seed per project (prior period hours before this import)
+    htd_seeds = {}
+    for proj, grp in df[df["credit_tag"] != "SKIPPED"].groupby("project"):
+        seed = float(grp["htd_start"].iloc[0]) if "htd_start" in grp.columns else 0
+        htd_seeds[proj] = seed
+
     for r_idx, (_, row) in enumerate(proj_sum.iterrows(), 3):
         ptype   = str(row["project_type"]).strip()
         _pm     = [(k, float(v)) for k, v in scope_map.items() if k.strip().lower() in ptype.lower()]
         scope_h = max(_pm, key=lambda x: len(x[0]))[1] if _pm else 0
 
-        # Updated HTD = prior HTD (from consumed seed) + credit hrs this period
-        proj_key   = row["project"]
-        updated_h  = consumed.get(proj_key, row["credit_hrs"])
+        proj_key  = row["project"]
+        seed      = htd_seeds.get(proj_key, 0)
+        # Updated HTD = prior HTD seed + total hours booked this period
+        updated_h = seed + row["hours_booked"]
 
-        # Burn % uses updated HTD (includes prior periods)
+        # Burn % = updated HTD / scoped hrs (includes prior periods)
         burn = updated_h / scope_h if scope_h > 0 else 0
 
         vari_h  = row["variance_hrs"]
@@ -471,9 +478,9 @@ def build_excel(df, scope_map, consumed):
     ws6.sheet_properties.tabColor = "27AE60"
     ws6.freeze_panes = "A3"
 
-    tah = ["Project Type","Project","Task Category","Hours Booked","% of Project Hrs"]
-    taw = [20,35,25,14,18]
-    write_title(ws6, "TASK ANALYSIS — Hours by Project Type › Project › Task", len(tah))
+    tah = ["Project Type","Task Category","Hours Booked","% of Type Hrs"]
+    taw = [25,28,14,16]
+    write_title(ws6, "TASK ANALYSIS — Hours by Project Type › Task", len(tah))
     style_header(ws6, 2, tah, TEAL)
     for i, w in enumerate(taw, 1):
         ws6.column_dimensions[get_column_letter(i)].width = w
@@ -484,18 +491,17 @@ def build_excel(df, scope_map, consumed):
 
     if len(ff_df) > 0:
         task_sum = ff_df.groupby(
-            ["project_type","project","ff_task"], as_index=False
-        ).agg(hours=("hours","sum")).sort_values(["project_type","project","ff_task"])
+            ["project_type","ff_task"], as_index=False
+        ).agg(hours=("hours","sum")).sort_values(["project_type","ff_task"])
 
-        # Total hours per project for % calc
-        proj_totals = ff_df.groupby("project")["hours"].sum().to_dict()
+        # Total hours per project type for % calc
+        type_totals = ff_df.groupby("project_type")["hours"].sum().to_dict()
 
         for r_idx, (_, row) in enumerate(task_sum.iterrows(), 3):
-            proj_total = proj_totals.get(row["project"], 0)
-            pct        = row["hours"] / proj_total if proj_total > 0 else 0
+            type_total = type_totals.get(row["project_type"], 0)
+            pct        = row["hours"] / type_total if type_total > 0 else 0
             bg         = bgs[r_idx % 2]
 
-            # Colour by task category
             task_colors = {
                 "Configuration":        "EBF5FB",
                 "Enablement/Training":  "EAF9F1",
@@ -504,12 +510,12 @@ def build_excel(df, scope_map, consumed):
             }
             task_bg = task_colors.get(row["ff_task"], bg)
 
-            vals = [row["project_type"], row["project"], row["ff_task"], row["hours"], pct]
-            fmts = [None, None, None, "#,##0.00", "0.0%"]
+            vals = [row["project_type"], row["ff_task"], row["hours"], pct]
+            fmts = [None, None, "#,##0.00", "0.0%"]
             for c_idx, (val, fmt) in enumerate(zip(vals, fmts), 1):
                 cell = ws6.cell(row=r_idx, column=c_idx, value=val)
-                style_cell(cell, task_bg if c_idx == 3 else bg, fmt=fmt,
-                           align="right" if c_idx in (4,5) else "left")
+                style_cell(cell, task_bg if c_idx == 2 else bg, fmt=fmt,
+                           align="right" if c_idx in (3,4) else "left")
     else:
         ws6.cell(row=3, column=1, value="No Fixed Fee task data found. Check Billing Type and Task/Case columns.")
 
@@ -637,12 +643,14 @@ def main():
                 ["project","project_type"], as_index=False
             ).agg(hours_booked=("hours","sum"), credit_hrs=("credit_hrs","sum"),
                   variance_hrs=("variance_hrs","sum")).sort_values("project")
-            proj_sum["scope_hrs"]   = proj_sum["project_type"].apply(
+            proj_sum["scope_hrs"]  = proj_sum["project_type"].apply(
                 lambda pt: (lambda m: max(m, key=lambda x: len(x[0]))[1] if m else "—")(
                     [(k,v) for k,v in DEFAULT_SCOPE.items() if k.strip().lower() in str(pt).strip().lower()]))
-            proj_sum["updated_htd"] = proj_sum["project"].map(consumed)
+            htd_seeds_ui = df[df["credit_tag"] != "SKIPPED"].groupby("project")["htd_start"].first()
+            proj_sum["htd_seed"]    = proj_sum["project"].map(htd_seeds_ui).fillna(0)
+            proj_sum["updated_htd"] = proj_sum["htd_seed"] + proj_sum["hours_booked"]
             proj_sum["burn_pct"]    = proj_sum.apply(
-                lambda r: f"{consumed.get(r['project'],0)/r['scope_hrs']*100:.1f}%"
+                lambda r: f"{r['updated_htd']/r['scope_hrs']*100:.1f}%"
                 if isinstance(r["scope_hrs"], (int,float)) and r["scope_hrs"] > 0 else "—", axis=1)
             st.dataframe(proj_sum, use_container_width=True, hide_index=True)
 
@@ -658,11 +666,11 @@ def main():
         with tab4:
             ff_df = df[df["ff_task"].notna()] if "ff_task" in df.columns else pd.DataFrame()
             if len(ff_df) > 0:
-                task_sum = ff_df.groupby(["project_type","project","ff_task"], as_index=False
-                ).agg(hours=("hours","sum")).sort_values(["project_type","project"])
-                proj_totals = ff_df.groupby("project")["hours"].sum()
-                task_sum["pct_of_project"] = task_sum.apply(
-                    lambda r: f"{r['hours']/proj_totals.get(r['project'],1)*100:.1f}%", axis=1)
+                task_sum = ff_df.groupby(["project_type","ff_task"], as_index=False
+                ).agg(hours=("hours","sum")).sort_values(["project_type","ff_task"])
+                type_totals = ff_df.groupby("project_type")["hours"].sum()
+                task_sum["pct_of_type"] = task_sum.apply(
+                    lambda r: f"{r['hours']/type_totals.get(r['project_type'],1)*100:.1f}%", axis=1)
                 st.dataframe(task_sum, use_container_width=True, hide_index=True)
             else:
                 st.info("No Fixed Fee task data found. Check Billing Type and Task/Case columns.")
