@@ -42,6 +42,9 @@ TAG_BADGE = {
 }
 
 # ── Stored scope map ──────────────────────────────────────────────────────────
+# ── Employees excluded from utilization targets ──────────────────────────────
+UTIL_EXEMPT_EMPLOYEES = ["swanson"]  # case-insensitive match
+
 PS_REGION_MAP = {
     "Sydney (NSW)":     "APAC",
     "Manila (PH)":      "APAC",
@@ -386,7 +389,7 @@ def build_excel(df, scope_map, consumed):
         period  = row["period"]
         region  = emp_region.get(emp, "")
         avail   = get_avail_hours(region, period) if region else None
-        util    = row["credit_hrs"] / avail if avail else 0
+        util    = row["credit_hrs"] / row["hours_this_period"] if row["hours_this_period"] > 0 else 0
         bg, _grp_idx = group_bg(emp, _prev_emp, _grp_idx)
         _prev_emp = emp
         util_bg = ("EAF9F1" if util >= 0.8 else "FEF9E7" if util >= 0.6 else "FDECED")
@@ -711,7 +714,7 @@ def build_excel(df, scope_map, consumed):
         ps_reg  = row["ps_region"]
         avail_h = ps_avail.get(ps_reg)
         admin_h = ps_admin.get(ps_reg, 0)
-        util    = row["credit_hrs"] / avail_h if avail_h else 0
+        util    = row["credit_hrs"] / row["hours_this_period"] if row["hours_this_period"] > 0 else 0
         util_bg = ("EAF9F1" if util >= 0.8 else "FEF9E7" if util >= 0.6 else "FDECED")
         bg      = bgs[r_idx % 2]
         vals    = [ps_reg, avail_h or "—", row["hours_this_period"], row["credit_hrs"],
@@ -938,18 +941,22 @@ def build_excel(df, scope_map, consumed):
         _row = ps_sum_d.loc[reg]
         _adm = float(ps_admin_d.get(reg,0)) if reg in ps_admin_d.index else 0
         _avl = ps_avail_d.get(reg,0)
-        _util= _row["credit"] / _avl if _avl > 0 else 0
+        _util= _row["credit"] / _row["hours"] if _row["hours"] > 0 else None
         _us  = "green" if _util>=0.70 else "yellow" if _util>=0.60 else "red"
         _bg  = bgs[ri % 2]
-        for ci2, (val2, fmt2) in enumerate([
-            (reg,None),(_row["hours"],"#,##0.00"),(_row["credit"],"#,##0.00"),
-            (_util,"0.0%"),(_row["overrun"],"#,##0.00"),(_adm,"#,##0.00")], 2):
+        _util_color = ("E74C3C" if _util<0.60 else "2ECC71" if _util>=0.70 else "F39C12") if _util is not None else "808080"
+        _dash_ps_vals = [
+            (2, reg,                    None,        False, "000000"),
+            (3, _row["hours"],          "#,##0.00",  False, "000000"),
+            (4, _row["credit"],         "#,##0.00",  False, "000000"),
+            (5, _util if _util is not None else "—", "0.0%" if _util is not None else None, True, _util_color),
+            (6, _row["overrun"],        "#,##0.00",  False, "000000"),
+            (7, _adm,                   "#,##0.00",  False, "000000"),
+        ]
+        for ci2, val2, fmt2, bold2, color2 in _dash_ps_vals:
             _c = ws_dash.cell(row=ri, column=ci2, value=val2)
-            _util_color = "E74C3C" if _util<0.60 else "2ECC71" if _util>=0.70 else "F39C12"
-            _c.font = Font(name="Manrope", size=10,
-                bold=(ci2==5),
-                color=_util_color if ci2==5 else "000000")
-            _c.fill = PatternFill("solid", fgColor=_bg)
+            _c.font  = Font(name="Manrope", size=10, bold=bold2, color=color2)
+            _c.fill  = PatternFill("solid", fgColor=_bg)
             _c.border = thin_border()
             if fmt2: _c.number_format = fmt2
 
@@ -984,6 +991,9 @@ def build_excel(df, scope_map, consumed):
     _low_rows = []
     for _, _erow in emp_sum.iterrows():
         _emp3  = _erow["employee"]
+        # Skip util-exempt employees
+        if any(_emp3.lower().startswith(ex.lower()) for ex in UTIL_EXEMPT_EMPLOYEES):
+            continue
         _loc3  = emp_region.get(_emp3,"")
         _ps3   = PS_REGION_MAP.get(_loc3,"Other")
         _p3    = _erow["period"]
