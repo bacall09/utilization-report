@@ -67,6 +67,7 @@ def auto_detect_columns(df):
         "task":         ["case/task/event", "task", "case", "event", "memo"],
         "non_billable": ["non-billable", "non billable", "nonbillable",
                          "non_billable", "is non billable"],
+        "billing_type": ["billing type", "billing_type", "bill type", "billtype"],
     }
     mapping = {}
     unmatched = []
@@ -103,7 +104,9 @@ def assign_credits(df, scope_map):
         ptype = str(row.get("project_type", "")).strip()
         hrs   = float(row.get("hours", 0))
         nb    = str(row.get("non_billable", "NO")).strip().upper()
-        is_zco = "ZCO" in ptype.upper()
+        is_zco    = "ZCO" in ptype.upper()
+        bill_type = str(row.get("billing_type", "")).strip().lower()
+        is_tm     = bill_type == "t&m"
 
         if hrs <= 0:
             credit_hrs_list.append(0)
@@ -120,19 +123,35 @@ def assign_credits(df, scope_map):
             notes_list.append("Excluded: ZCO Internal Project")
             continue
 
-        # Rule 2: Billable = full credit
-        if nb == "NO":
+        # Rule 2: T&M billing type = always full credit, no cap
+        if is_tm:
+            credit_hrs_list.append(hrs)
+            variance_hrs_list.append(0)
+            credit_tag_list.append("CREDITED")
+            notes_list.append("T&M: full credit")
+            continue
+
+        # Rule 3: Billable (non-billable = No, no billing type) = full credit
+        if nb == "NO" and not is_tm:
             credit_hrs_list.append(hrs)
             variance_hrs_list.append(0)
             credit_tag_list.append("CREDITED")
             notes_list.append("Billable: full credit")
             continue
 
-        # Rule 3: NB non-ZCO = capped at scope
-        scope_hrs = next(
-            (float(v) for k, v in scope_map.items()
-             if k.strip().lower() == ptype.strip().lower()), None
-        )
+        # Rule 4: NB non-ZCO = capped at scope
+        # Match by specificity — longest matching key wins
+        # e.g. "Capture and E-Invoicing" beats "Capture" for that type
+        _ptype_lower = ptype.strip().lower()
+        _matches = [
+            (k, float(v)) for k, v in scope_map.items()
+            if k.strip().lower() in _ptype_lower
+        ]
+        if _matches:
+            # Pick the match with the longest key (most specific)
+            scope_hrs = max(_matches, key=lambda x: len(x[0]))[1]
+        else:
+            scope_hrs = None
 
         if scope_hrs is None:
             credit_hrs_list.append(0)
@@ -209,11 +228,11 @@ def build_excel(df, scope_map):
     ws.sheet_properties.tabColor = TEAL
     ws.freeze_panes = "A3"
 
-    headers = ["Employee","Project","Project Type","Date","Hours Logged",
+    headers = ["Employee","Project","Project Type","Billing Type","Date","Hours Logged",
                "Approval","Task/Case","Non-Billable","Credit Hrs",
                "Variance Hrs","Credit Tag","Period","Notes"]
-    widths  = [20,35,20,14,13,14,25,13,12,12,16,12,45]
-    cols    = ["employee","project","project_type","date","hours",
+    widths  = [20,35,20,14,14,13,14,25,13,12,12,16,12,45]
+    cols    = ["employee","project","project_type","billing_type","date","hours",
                "approval","task","non_billable","credit_hrs",
                "variance_hrs","credit_tag","period","notes"]
 
@@ -237,7 +256,7 @@ def build_excel(df, scope_map):
                 fmt = "#,##0.00"; align = "right"
             elif col == "credit_tag":
                 bold = True; align = "center"
-            elif col == "period":
+            elif col in ("period","billing_type"):
                 align = "center"
             style_cell(cell, bg, fmt=fmt, bold=bold, align=align)
 
@@ -300,8 +319,10 @@ def build_excel(df, scope_map):
 
     for r_idx, (_, row) in enumerate(proj_sum.iterrows(), 3):
         ptype   = str(row["project_type"]).strip()
-        scope_h = next((float(v) for k, v in scope_map.items()
-                        if k.strip().lower() == ptype.lower()), 0)
+        _pt = ptype.lower()
+        _pm = [(k, float(v)) for k, v in scope_map.items()
+               if k.strip().lower() in _pt]
+        scope_h = max(_pm, key=lambda x: len(x[0]))[1] if _pm else 0
         cred_h  = row["credit_hrs"]
         vari_h  = row["variance_hrs"]
         burn    = cred_h / scope_h if scope_h > 0 else 0
@@ -379,7 +400,7 @@ def main():
     with col1:
         scope_input = st.text_area(
             "Project Type → Scoped Hours (one per line, format: Type Name = Hours)",
-            value="Fixed Fee = 40\nRevenue Carve-Out = 20",
+            value="Capture = 20\nApprovals = 17\nReconcile = 17\nPSP = 18\nPayments = 30\nReconcile 2.0 = 20\nCC = 6\nSFTP = 12\nPremium - 10 = 10\nPremium - 20 = 20\nE-Invoicing = 15\nCapture and E-Invoicing = 30\nAdditional Subsidiary = 2",
             height=120,
         )
 
@@ -495,8 +516,11 @@ def main():
                 variance_hrs=("variance_hrs","sum"),
             ).sort_values("project")
             proj_sum["scope_hrs"] = proj_sum["project_type"].apply(
-                lambda pt: next((v for k, v in scope_map.items()
-                                 if k.strip().lower() == str(pt).strip().lower()), "—")
+                lambda pt: (
+                    lambda matches: max(matches, key=lambda x: len(x[0]))[1]
+                    if matches else "—"
+                )([(k, v) for k, v in scope_map.items()
+                   if k.strip().lower() in str(pt).strip().lower()])
             )
             proj_sum["burn_pct"] = proj_sum.apply(
                 lambda r: f"{r['credit_hrs']/r['scope_hrs']*100:.1f}%"
@@ -505,7 +529,7 @@ def main():
             st.dataframe(proj_sum, use_container_width=True, hide_index=True)
 
         with tab3:
-            display_cols = ["employee","project","project_type","date",
+            display_cols = ["employee","project","project_type","billing_type","date",
                             "hours","credit_hrs","variance_hrs","credit_tag","notes"]
             existing = [c for c in display_cols if c in df.columns]
             st.dataframe(df[existing].head(100), use_container_width=True, hide_index=True)
