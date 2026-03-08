@@ -773,9 +773,11 @@ def main():
                     (df["billing_type"].str.lower()=="internal"), "hours"
                 ].sum() if "billing_type" in df.columns else 0),
             ).sort_values(["employee","period"])
-            emp_sum_ui["location"]   = emp_sum_ui["employee"].map(emp_region)
+            # Build region lookup directly from df for UI context
+            _emp_region_ui = df.dropna(subset=["region"]).groupby("employee")["region"].first().to_dict() if "region" in df.columns else {}
+            emp_sum_ui["location"]   = emp_sum_ui["employee"].map(_emp_region_ui)
             emp_sum_ui["avail_hrs"]  = emp_sum_ui.apply(
-                lambda r: get_avail_hours(r["location"], r["period"]), axis=1)
+                lambda r: get_avail_hours(r["location"], r["period"]) if r["location"] else None, axis=1)
             emp_sum_ui["util_pct"]   = emp_sum_ui.apply(
                 lambda r: f"{r['credit_hrs']/r['avail_hrs']*100:.1f}%" if r["avail_hrs"] else "—", axis=1)
             display_cols = ["employee","location","period","avail_hrs",
