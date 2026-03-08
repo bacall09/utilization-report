@@ -326,7 +326,7 @@ def build_excel(df, scope_map, consumed):
     ws2.freeze_panes = "A3"
 
     eh = ["Employee","Location","Customer Region","Project Manager","Period",
-          "Avail Hrs","Hours This Period","Utilization Credits","Project Overrun Hrs","Admin Hrs","Util %"]
+          "Avail Hrs","Hours This Period","Utilization Credits","FF Project Overrun Hrs","Admin Hrs","Util %"]
     ew = [22,16,18,20,12,12,15,18,18,14,10]
     write_title(ws2, "SUMMARY — Utilization by Employee", len(eh))
     style_header(ws2, 2, eh, TEAL)
@@ -374,7 +374,7 @@ def build_excel(df, scope_map, consumed):
         pm          = emp_pm.get(emp, "")
         vals = [emp, region, cust_region, pm, period, avail or "—",
                 row["hours_this_period"], row["credit_hrs"],
-                row["overrun_hrs"], row.get("admin_hrs", 0),
+                row["ff_overrun_hrs"], row.get("admin_hrs", 0),
                 util if avail else "—"]
         fmts = [None,None,None,None,None,"#,##0.00","#,##0.00","#,##0.00","#,##0.00","#,##0.00","0.0%"]
 
@@ -743,7 +743,7 @@ def main():
         with m3:
             st.markdown(f"<div style='font-size:14px;color:#a0a0a0;font-family:Manrope,sans-serif'>Utilization Credits</div><div style='font-size:36px;font-weight:700;font-family:Manrope,sans-serif;line-height:1.1'>{total_credit:,.1f}</div>" + PILL.format(bg=credit_color+"33", fg=credit_color, txt=f"{credit_pct:.1%} of total hrs · {credit_label}"), unsafe_allow_html=True)
         with m4:
-            st.markdown(f"<div style='font-size:14px;color:#a0a0a0;font-family:Manrope,sans-serif'>Project Overrun Hrs</div><div style='font-size:36px;font-weight:700;font-family:Manrope,sans-serif;line-height:1.1'>{total_proj_overrun:,.1f}</div>" + PILL.format(bg="#ff4b4b33", fg="#ff4b4b", txt=f"{overrun_pct:.1%} of total hrs"), unsafe_allow_html=True)
+            st.markdown(f"<div style='font-size:14px;color:#a0a0a0;font-family:Manrope,sans-serif'>FF Project Overrun Hrs</div><div style='font-size:36px;font-weight:700;font-family:Manrope,sans-serif;line-height:1.1'>{total_proj_overrun:,.1f}</div>" + PILL.format(bg="#ff4b4b33", fg="#ff4b4b", txt=f"{overrun_pct:.1%} of total hrs"), unsafe_allow_html=True)
         with m5:
             st.markdown(f"<div style='font-size:14px;color:#a0a0a0;font-family:Manrope,sans-serif'>Admin Hrs</div><div style='font-size:36px;font-weight:700;font-family:Manrope,sans-serif;line-height:1.1'>{total_admin:,.1f}</div>" + PILL.format(bg="#80849533", fg="#808495", txt=f"{admin_pct:.1%} of total hrs"), unsafe_allow_html=True)
 
@@ -765,32 +765,34 @@ def main():
             emp_region = df.dropna(subset=["region"]).groupby("employee")["region"].first().to_dict()
 
         with tab1:
-            emp_sum = df[df["credit_tag"] != "SKIPPED"].groupby(
-                ["employee","period"], as_index=False
-            ).agg(hours_this_period=("hours","sum"), credit_hrs=("credit_hrs","sum"),
-                  variance_hrs=("variance_hrs","sum")).sort_values(["employee","period"])
-            emp_sum["region"]    = emp_sum["employee"].map(emp_region)
-            emp_sum["avail_hrs"] = emp_sum.apply(
-                lambda r: get_avail_hours(r["region"], r["period"]), axis=1)
-            emp_sum["util_pct"]  = emp_sum.apply(
+            _ep = df[df["credit_tag"] != "SKIPPED"]
+            emp_sum_ui = _ep.groupby(["employee","period"], as_index=False).agg(
+                hours_this_period=("hours","sum"),
+                credit_hrs=("credit_hrs","sum"),
+                ff_overrun_hrs=("variance_hrs","sum"),
+                admin_hrs=("hours", lambda x: df.loc[
+                    (df["employee"].isin(_ep["employee"])) &
+                    (df["billing_type"].str.lower()=="internal"), "hours"
+                ].sum() if "billing_type" in df.columns else 0),
+            ).sort_values(["employee","period"])
+            emp_sum_ui["location"]   = emp_sum_ui["employee"].map(emp_region)
+            emp_sum_ui["avail_hrs"]  = emp_sum_ui.apply(
+                lambda r: get_avail_hours(r["location"], r["period"]), axis=1)
+            emp_sum_ui["util_pct"]   = emp_sum_ui.apply(
                 lambda r: f"{r['credit_hrs']/r['avail_hrs']*100:.1f}%" if r["avail_hrs"] else "—", axis=1)
-            st.dataframe(emp_sum, use_container_width=True, hide_index=True)
+            display_cols = ["employee","location","period","avail_hrs",
+                            "hours_this_period","credit_hrs","ff_overrun_hrs","util_pct"]
+            st.dataframe(emp_sum_ui[[c for c in display_cols if c in emp_sum_ui.columns]],
+                         use_container_width=True, hide_index=True)
 
         with tab2:
-            proj_sum = df[df["credit_tag"] != "SKIPPED"].groupby(
+            proj_sum_ui = df[df["credit_tag"] != "SKIPPED"].groupby(
                 ["project","project_type"], as_index=False
             ).agg(hours_this_period=("hours","sum"), credit_hrs=("credit_hrs","sum"),
-                  variance_hrs=("variance_hrs","sum")).sort_values("project")
-            proj_sum["scope_hrs"]  = proj_sum["project_type"].apply(
-                lambda pt: (lambda m: max(m, key=lambda x: len(x[0]))[1] if m else "—")(
-                    [(k,v) for k,v in DEFAULT_SCOPE.items() if k.strip().lower() in str(pt).strip().lower()]))
-            htd_seeds_ui = df[df["credit_tag"] != "SKIPPED"].groupby("project")["htd_start"].first()
-            proj_sum["htd_seed"]    = proj_sum["project"].map(htd_seeds_ui).fillna(0)
-            proj_sum["updated_htd"] = proj_sum["htd_seed"] + proj_sum["hours_this_period"]
-            proj_sum["burn_pct"]    = proj_sum.apply(
-                lambda r: f"{r['updated_htd']/r['scope_hrs']*100:.1f}%"
-                if isinstance(r["scope_hrs"], (int,float)) and r["scope_hrs"] > 0 else "—", axis=1)
-            st.dataframe(proj_sum, use_container_width=True, hide_index=True)
+                  ff_overrun_hrs=("variance_hrs","sum")).sort_values("project")
+            st.dataframe(proj_sum_ui[["project","project_type","hours_this_period",
+                         "credit_hrs","ff_overrun_hrs"]],
+                         use_container_width=True, hide_index=True)
 
         with tab3:
             zco_df = df[df["credit_tag"] == "NON-BILLABLE"]
