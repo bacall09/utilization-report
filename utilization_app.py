@@ -735,34 +735,28 @@ def main():
         credit_color = "#2ecc71" if credit_pct >= 0.70 else "#f39c12" if credit_pct >= 0.60 else "#e74c3c"
         credit_label = "On target" if credit_pct >= 0.70 else "Below target" if credit_pct >= 0.60 else "At risk"
 
+        # Max date in report
+        if "date" in df.columns:
+            max_date = pd.to_datetime(df["date"], errors="coerce").max()
+            date_str = max_date.strftime("%-d %B %Y") if pd.notna(max_date) else "—"
+        else:
+            date_str = "—"
+        st.markdown(f"<div style='font-size:13px;color:#a0a0a0;font-family:Manrope,sans-serif;margin-bottom:12px'>Data through <strong style='color:#ffffff'>{date_str}</strong></div>", unsafe_allow_html=True)
+
         m1,m2,m3,m4,m5 = st.columns(5)
-        m1.metric("Rows Processed",    f"{total_rows:,}")
-        m2.metric("Hours This Period", f"{hours_this_period:,.1f}")
-        PILL = "<div style='display:inline-block;margin-top:4px;padding:2px 10px;border-radius:999px;background-color:{bg};font-size:13px;font-family:Manrope,sans-serif;color:{fg}'>↑ {txt}</div>"
+        def metric_card(label, value, pill_txt=None, pill_fg=None):
+            pill = ""
+            if pill_txt and pill_fg:
+                pill = f"<div style='display:inline-block;margin-top:6px;padding:2px 10px;border-radius:999px;background-color:{pill_fg}33;font-size:13px;font-family:Manrope,sans-serif;color:{pill_fg}'>&#8593; {pill_txt}</div>"
+            return f"<div style='font-size:14px;color:#a0a0a0;font-family:Manrope,sans-serif;margin-bottom:4px'>{label}</div><div style='font-size:36px;font-weight:700;color:#ffffff;font-family:Manrope,sans-serif;line-height:1.1'>{value}</div>{pill}"
 
-        with m3:
-            st.markdown(f"<div style='font-size:14px;color:#a0a0a0;font-family:Manrope,sans-serif'>Utilization Credits</div><div style='font-size:36px;font-weight:700;font-family:Manrope,sans-serif;line-height:1.1'>{total_credit:,.1f}</div>" + PILL.format(bg=credit_color+"33", fg=credit_color, txt=f"{credit_pct:.1%} of total hrs · {credit_label}"), unsafe_allow_html=True)
-        with m4:
-            st.markdown(f"<div style='font-size:14px;color:#a0a0a0;font-family:Manrope,sans-serif'>FF Project Overrun Hrs</div><div style='font-size:36px;font-weight:700;font-family:Manrope,sans-serif;line-height:1.1'>{total_proj_overrun:,.1f}</div>" + PILL.format(bg="#ff4b4b33", fg="#ff4b4b", txt=f"{overrun_pct:.1%} of total hrs"), unsafe_allow_html=True)
-        with m5:
-            st.markdown(f"<div style='font-size:14px;color:#a0a0a0;font-family:Manrope,sans-serif'>Admin Hrs</div><div style='font-size:36px;font-weight:700;font-family:Manrope,sans-serif;line-height:1.1'>{total_admin:,.1f}</div>" + PILL.format(bg="#80849533", fg="#808495", txt=f"{admin_pct:.1%} of total hrs"), unsafe_allow_html=True)
+        m1,m2,m3,m4,m5 = st.columns(5)
+        with m1: st.markdown(metric_card("Rows Processed",        f"{total_rows:,}"), unsafe_allow_html=True)
+        with m2: st.markdown(metric_card("Hours This Period",      f"{hours_this_period:,.1f}"), unsafe_allow_html=True)
+        with m3: st.markdown(metric_card("Utilization Credits",    f"{total_credit:,.1f}",    f"{credit_pct:.1%} of total hrs · {credit_label}", credit_color), unsafe_allow_html=True)
+        with m4: st.markdown(metric_card("FF Project Overrun Hrs", f"{total_proj_overrun:,.1f}", f"{overrun_pct:.1%} of total hrs", "#ff4b4b"), unsafe_allow_html=True)
+        with m5: st.markdown(metric_card("Admin Hrs",              f"{total_admin:,.1f}",     f"{admin_pct:.1%} of total hrs",    "#808495"), unsafe_allow_html=True)
 
-        st.markdown("**Credit Tag Breakdown**")
-        tag_counts = df[df["credit_tag"] != "SKIPPED"]["credit_tag"].value_counts()
-        tcols = st.columns(len(tag_counts))
-        for i, (tag, count) in enumerate(tag_counts.items()):
-            tcols[i].markdown(f"{TAG_BADGE.get(tag,'⚪')} **{tag}**  \n{count:,} rows")
-
-        st.divider()
-
-        # Previews
-        tab1, tab2, tab3, tab4, tab5 = st.tabs(
-            ["By Employee", "By Project", "ZCO Non-Billable", "Task Analysis", "Detail"]
-        )
-
-        emp_region = {}
-        if "region" in df.columns:
-            emp_region = df.dropna(subset=["region"]).groupby("employee")["region"].first().to_dict()
 
         with tab1:
             _ep = df[df["credit_tag"] != "SKIPPED"]
