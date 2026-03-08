@@ -152,7 +152,9 @@ def auto_detect_columns(df):
         "billing_type":  ["billing type", "billing_type", "bill type", "billtype"],
         "hours_to_date": ["hours to date", "hours_to_date", "htd", "prior hours",
                           "cumulative hours", "hours booked to date"],
-        "region":        ["region", "location", "country", "office"],
+        "region":           ["location", "region", "country", "office"],
+        "customer_region":  ["customer region", "customer_region", "cust region", "client region"],
+        "project_manager":  ["project manager", "project_manager", "pm", "manager"],
     }
     mapping = {}
     unmatched = []
@@ -281,13 +283,15 @@ def build_excel(df, scope_map, consumed):
     ws.sheet_properties.tabColor = TEAL
     ws.freeze_panes = "A3"
 
-    headers = ["Employee","Region","Project","Project Type","Billing Type","Hrs to Date",
-               "Date","Hours Logged","Approval","Task/Case","Non-Billable",
-               "Credit Hrs","Variance Hrs","Updated Hrs to Date","Credit Tag","Period","Notes"]
-    widths  = [20,16,35,20,14,13,14,13,14,25,13,12,12,18,16,12,45]
-    cols    = ["employee","region","project","project_type","billing_type","hours_to_date",
-               "date","hours","approval","task","non_billable","credit_hrs",
-               "variance_hrs","updated_htd","credit_tag","period","notes"]
+    headers = ["Employee","Location","Customer Region","Project Manager","Project",
+               "Project Type","Billing Type","Hrs to Date","Date","Hours Logged",
+               "Approval","Task/Case","Non-Billable","Credit Hrs","Variance Hrs",
+               "Updated Hrs to Date","Credit Tag","Period","Notes"]
+    widths  = [20,16,18,20,35,20,14,13,14,13,14,25,13,12,12,18,16,12,45]
+    cols    = ["employee","region","customer_region","project_manager","project",
+               "project_type","billing_type","hours_to_date","date","hours",
+               "approval","task","non_billable","credit_hrs","variance_hrs",
+               "updated_htd","credit_tag","period","notes"]
 
     write_title(ws, "PROCESSED DATA — Utilization Credit Detail", len(headers))
     style_header(ws, 2, headers, TEAL)
@@ -318,9 +322,9 @@ def build_excel(df, scope_map, consumed):
     ws2.sheet_properties.tabColor = NAVY
     ws2.freeze_panes = "A3"
 
-    eh = ["Employee","Region","Period","Avail Hrs","Hours This Period",
-          "Utilization Credits","Project Overrun Hrs","Admin Hrs","Util %"]
-    ew = [22,18,12,12,14,18,18,14,10]
+    eh = ["Employee","Location","Customer Region","Project Manager","Period",
+          "Avail Hrs","Hours This Period","Utilization Credits","Project Overrun Hrs","Admin Hrs","Util %"]
+    ew = [22,16,18,20,12,12,15,18,18,14,10]
     write_title(ws2, "SUMMARY — Utilization by Employee", len(eh))
     style_header(ws2, 2, eh, TEAL)
     for i, w in enumerate(ew, 1):
@@ -328,8 +332,14 @@ def build_excel(df, scope_map, consumed):
 
     # Get region per employee (first occurrence)
     emp_region = {}
+    emp_cust_region = {}
+    emp_pm = {}
     if "region" in df.columns:
         emp_region = df.dropna(subset=["region"]).groupby("employee")["region"].first().to_dict()
+    if "customer_region" in df.columns:
+        emp_cust_region = df.dropna(subset=["customer_region"]).groupby("employee")["customer_region"].first().to_dict()
+    if "project_manager" in df.columns:
+        emp_pm = df.dropna(subset=["project_manager"]).groupby("employee")["project_manager"].first().to_dict()
 
     # Admin hours = all Internal billing type rows
     admin_hrs = df[df["billing_type"].str.lower() == "internal"].groupby(
@@ -357,16 +367,18 @@ def build_excel(df, scope_map, consumed):
         _prev_emp = emp
         util_bg = ("EAF9F1" if util >= 0.8 else "FEF9E7" if util >= 0.6 else "FDECED")
 
-        vals = [emp, region, period, avail or "—",
+        cust_region = emp_cust_region.get(emp, "")
+        pm          = emp_pm.get(emp, "")
+        vals = [emp, region, cust_region, pm, period, avail or "—",
                 row["hours_this_period"], row["credit_hrs"],
                 row["overrun_hrs"], row.get("admin_hrs", 0),
                 util if avail else "—"]
-        fmts = [None,None,None,"#,##0.00","#,##0.00","#,##0.00","#,##0.00","#,##0.00","0.0%"]
+        fmts = [None,None,None,None,None,"#,##0.00","#,##0.00","#,##0.00","#,##0.00","#,##0.00","0.0%"]
 
         for c_idx, (val, fmt) in enumerate(zip(vals, fmts), 1):
             cell = ws2.cell(row=r_idx, column=c_idx, value=val)
-            style_cell(cell, util_bg if c_idx == 9 else bg, fmt=fmt,
-                       align="right" if c_idx > 3 else "center" if c_idx == 3 else "left")
+            style_cell(cell, util_bg if c_idx == 11 else bg, fmt=fmt,
+                       align="right" if c_idx > 5 else "center" if c_idx == 5 else "left")
 
     # ── 3. PROJECT SUMMARY ────────────────────────────────────
     ws3 = wb.create_sheet("SUMMARY - By Project")
@@ -381,7 +393,13 @@ def build_excel(df, scope_map, consumed):
     for i, w in enumerate(pw, 1):
         ws3.column_dimensions[get_column_letter(i)].width = w
 
-    proj_sum = df[df["credit_tag"] != "SKIPPED"].groupby(
+    # Project Summary: Fixed Fee only
+    ff_proj_df = df[
+        (df["credit_tag"] != "SKIPPED") &
+        (df["billing_type"].str.lower() == "fixed fee")
+    ] if "billing_type" in df.columns else df[df["credit_tag"] != "SKIPPED"]
+
+    proj_sum = ff_proj_df.groupby(
         ["project","project_type"], as_index=False
     ).agg(
         hours_this_period=("hours","sum"),
@@ -493,8 +511,10 @@ def build_excel(df, scope_map, consumed):
             ["ff_task","project_type"], as_index=False
         ).agg(
             hours=("hours","sum"),
-            project_count=("project","nunique"),
         ).sort_values(["ff_task","project_type"])
+
+        # Distinct project count per type (across all tasks) for avg calc
+        proj_count_by_type = ff_df.groupby("project_type")["project"].nunique().to_dict()
 
         # Total hours per type for % calc
         type_totals = ff_df.groupby("project_type")["hours"].sum().to_dict()
@@ -503,8 +523,8 @@ def build_excel(df, scope_map, consumed):
         for r_idx, (_, row) in enumerate(task_sum.iterrows(), 3):
             type_total = type_totals.get(row["project_type"], 0)
             pct        = row["hours"] / type_total if type_total > 0 else 0
-            proj_cnt   = row["project_count"] if row["project_count"] > 0 else 1
-            raw_avg    = row["hours"] / proj_cnt
+            proj_cnt   = proj_count_by_type.get(row["project_type"], 1)
+            raw_avg    = row["hours"] / proj_cnt if proj_cnt > 0 else 0
             # Round to nearest .25
             avg_hrs    = round(raw_avg * 4) / 4
             bg         = bgs[r_idx % 2]
