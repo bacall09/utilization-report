@@ -363,9 +363,9 @@ def build_excel(df, scope_map, consumed):
     ws3.sheet_properties.tabColor = "E67E22"
     ws3.freeze_panes = "A3"
 
-    ph = ["Project","Project Type","Scoped Hrs","Hours Booked",
-          "Credit Hrs","Variance Hrs","Updated Hrs to Date","Burn %","Status"]
-    pw = [35,20,12,12,12,12,18,10,12]
+    ph = ["Project","Project Type","Scoped Hrs","Hours to Date",
+          "Hours This Period","Credit Hrs","Variance Hrs","Updated Hrs to Date","Burn %","Status"]
+    pw = [35,20,12,15,15,12,12,18,10,12]
     write_title(ws3, "SUMMARY — Utilization by Project", len(ph))
     style_header(ws3, 2, ph, TEAL)
     for i, w in enumerate(pw, 1):
@@ -374,26 +374,23 @@ def build_excel(df, scope_map, consumed):
     proj_sum = df[df["credit_tag"] != "SKIPPED"].groupby(
         ["project","project_type"], as_index=False
     ).agg(
-        hours_booked=("hours","sum"),
+        hours_this_period=("hours","sum"),
         credit_hrs=("credit_hrs","sum"),
         variance_hrs=("variance_hrs","sum"),
+        htd_start=("htd_start","first"),
     ).sort_values("project")
 
-    # Compute HTD seed per project (prior period hours before this import)
-    htd_seeds = {}
-    for proj, grp in df[df["credit_tag"] != "SKIPPED"].groupby("project"):
-        seed = float(grp["htd_start"].iloc[0]) if "htd_start" in grp.columns else 0
-        htd_seeds[proj] = seed
+    # HTD seed now comes directly from aggregation above
+    htd_seeds = dict(zip(proj_sum["project"], proj_sum["htd_start"]))
 
     for r_idx, (_, row) in enumerate(proj_sum.iterrows(), 3):
         ptype   = str(row["project_type"]).strip()
         _pm     = [(k, float(v)) for k, v in scope_map.items() if k.strip().lower() in ptype.lower()]
         scope_h = max(_pm, key=lambda x: len(x[0]))[1] if _pm else 0
 
-        proj_key  = row["project"]
-        seed      = htd_seeds.get(proj_key, 0)
-        # Updated HTD = prior HTD seed + total hours booked this period
-        updated_h = seed + row["hours_booked"]
+        seed      = float(row["htd_start"]) if row["htd_start"] else 0
+        # Updated HTD = prior HTD seed + all hours booked this period
+        updated_h = seed + row["hours_this_period"]
 
         # Burn % = updated HTD / scoped hrs (includes prior periods)
         burn = updated_h / scope_h if scope_h > 0 else 0
@@ -407,55 +404,24 @@ def build_excel(df, scope_map, consumed):
         status_bg = {"OVERRUN":"FDECED","AT RISK":"FEF9E7","ON TRACK":"EAF9F1"}.get(status, LTGRAY)
         bg = bgs[r_idx % 2]
 
-        vals = [row["project"], ptype, scope_h or "—", row["hours_booked"],
-                row["credit_hrs"], vari_h, updated_h,
+        vals = [row["project"], ptype, scope_h or "—", row["htd_start"],
+                row["hours_this_period"], row["credit_hrs"], vari_h, updated_h,
                 burn if scope_h > 0 else "—", status]
-        fmts = [None,None,"#,##0.00","#,##0.00","#,##0.00","#,##0.00","#,##0.00","0.0%",None]
+        fmts = [None,None,"#,##0.00","#,##0.00","#,##0.00","#,##0.00","#,##0.00","#,##0.00","0.0%",None]
 
         for c_idx, (val, fmt) in enumerate(zip(vals, fmts), 1):
             cell = ws3.cell(row=r_idx, column=c_idx, value=val)
-            style_cell(cell, status_bg if c_idx == 9 else bg,
-                       fmt=fmt, bold=(c_idx == 9),
-                       align="right" if c_idx in (3,4,5,6,7,8) else "center" if c_idx == 9 else "left")
+            style_cell(cell, status_bg if c_idx == 10 else bg,
+                       fmt=fmt, bold=(c_idx == 10),
+                       align="right" if c_idx in (3,4,5,6,7,8,9) else "center" if c_idx == 10 else "left")
 
-    # ── 4. PERIOD SUMMARY ─────────────────────────────────────
-    ws4 = wb.create_sheet("SUMMARY - Period vs Period")
-    ws4.sheet_properties.tabColor = "8E44AD"
-    ws4.freeze_panes = "A3"
-
-    penh = ["Employee","Region","Period","Avail Hrs","Credit Hrs","Util %"]
-    penw = [22,18,12,12,14,10]
-    write_title(ws4, "SUMMARY — Credit Hours by Employee by Period", len(penh))
-    style_header(ws4, 2, penh, TEAL)
-    for i, w in enumerate(penw, 1):
-        ws4.column_dimensions[get_column_letter(i)].width = w
-
-    per_sum = df[df["credit_tag"].isin(["CREDITED","PARTIAL"])].groupby(
-        ["employee","period"], as_index=False
-    ).agg(credit_hrs=("credit_hrs","sum")).sort_values(["employee","period"])
-
-    for r_idx, (_, row) in enumerate(per_sum.iterrows(), 3):
-        emp    = row["employee"]
-        period = row["period"]
-        region = emp_region.get(emp, "")
-        avail  = get_avail_hours(region, period) if region else None
-        util   = row["credit_hrs"] / avail if avail else 0
-        bg     = bgs[r_idx % 2]
-        util_bg = ("EAF9F1" if util >= 0.8 else "FEF9E7" if util >= 0.6 else "FDECED")
-        vals = [emp, region, period, avail or "—", row["credit_hrs"], util if avail else "—"]
-        fmts = [None,None,None,"#,##0.00","#,##0.00","0.0%"]
-        for c_idx, (val, fmt) in enumerate(zip(vals, fmts), 1):
-            cell = ws4.cell(row=r_idx, column=c_idx, value=val)
-            style_cell(cell, util_bg if c_idx == 6 else bg, fmt=fmt,
-                       align="right" if c_idx > 3 else "left")
-
-    # ── 5. ZCO NON-BILLABLE BREAKDOWN ─────────────────────────
+    # ── 4. ZCO NON-BILLABLE BREAKDOWN ─────────────────────────
     ws5 = wb.create_sheet("ZCO Non-Billable")
     ws5.sheet_properties.tabColor = "95A5A6"
     ws5.freeze_panes = "A3"
 
-    znh = ["Employee","Period","Task / Activity","Hours"]
-    znw = [22,12,35,12]
+    znh = ["Task / Activity","Employee","Period","Hours"]
+    znw = [35,22,12,12]
     write_title(ws5, "ZCO NON-BILLABLE — Hours by Employee by Activity", len(znh))
     style_header(ws5, 2, znh, TEAL)
     for i, w in enumerate(znw, 1):
@@ -464,8 +430,8 @@ def build_excel(df, scope_map, consumed):
     zco_df = df[df["credit_tag"] == "NON-BILLABLE"].copy()
     if "task" in zco_df.columns and len(zco_df) > 0:
         zco_sum = zco_df.groupby(
-            ["employee","period","task"], as_index=False
-        ).agg(hours=("hours","sum")).sort_values(["employee","period","task"])
+            ["task","employee","period"], as_index=False
+        ).agg(hours=("hours","sum")).sort_values(["task","employee","period"])
 
         # Total hours per employee per period (all rows incl billable)
         emp_period_totals = df[df["credit_tag"] != "SKIPPED"].groupby(
@@ -483,23 +449,23 @@ def build_excel(df, scope_map, consumed):
             bg         = bgs[r_idx % 2]
             total_hrs  = emp_period_totals.get((row["employee"], row["period"]), 0)
             pct        = row["hours"] / total_hrs if total_hrs > 0 else 0
-            vals = [row["employee"], row["period"], row.get("task",""), row["hours"], pct]
+            vals = [row.get("task",""), row["employee"], row["period"], row["hours"], pct]
             fmts = [None, None, None, "#,##0.00", "0.0%"]
             for c_idx, (val, fmt) in enumerate(zip(vals, fmts), 1):
                 cell = ws5.cell(row=r_idx, column=c_idx, value=val)
                 style_cell(cell, bg, fmt=fmt,
-                           align="right" if c_idx in (4,5) else "center" if c_idx == 2 else "left")
+                           align="right" if c_idx in (4,5) else "center" if c_idx == 3 else "left")
     else:
         ws5.cell(row=3, column=1, value="No Non-Billable (Internal) entries in this period.")
 
-    # ── 6. PROJECT TYPE > TASK ANALYSIS ───────────────────────
+    # ── 5. TASK ANALYSIS ───────────────────────
     ws6 = wb.create_sheet("Task Analysis")
     ws6.sheet_properties.tabColor = "27AE60"
     ws6.freeze_panes = "A3"
 
-    tah = ["Task Category","Project Type","Project","Hours Booked","% of Project Hrs"]
-    taw = [25,20,35,14,18]
-    write_title(ws6, "TASK ANALYSIS — Hours by Task › Project Type › Project", len(tah))
+    tah = ["Task Category","Project Type","Hours Booked","% of Type Hrs"]
+    taw = [28,25,14,16]
+    write_title(ws6, "TASK ANALYSIS — Hours by Task › Project Type", len(tah))
     style_header(ws6, 2, tah, TEAL)
     for i, w in enumerate(taw, 1):
         ws6.column_dimensions[get_column_letter(i)].width = w
@@ -510,15 +476,15 @@ def build_excel(df, scope_map, consumed):
 
     if len(ff_df) > 0:
         task_sum = ff_df.groupby(
-            ["ff_task","project_type","project"], as_index=False
-        ).agg(hours=("hours","sum")).sort_values(["ff_task","project_type","project"])
+            ["ff_task","project_type"], as_index=False
+        ).agg(hours=("hours","sum")).sort_values(["ff_task","project_type"])
 
-        # Total hours per project for % calc
-        proj_totals = ff_df.groupby("project")["hours"].sum().to_dict()
+        # Total hours per type for % calc
+        type_totals = ff_df.groupby("project_type")["hours"].sum().to_dict()
 
         for r_idx, (_, row) in enumerate(task_sum.iterrows(), 3):
-            proj_total = proj_totals.get(row["project"], 0)
-            pct        = row["hours"] / proj_total if proj_total > 0 else 0
+            type_total = type_totals.get(row["project_type"], 0)
+            pct        = row["hours"] / type_total if type_total > 0 else 0
             bg         = bgs[r_idx % 2]
 
             task_colors = {
@@ -529,16 +495,16 @@ def build_excel(df, scope_map, consumed):
             }
             task_bg = task_colors.get(row["ff_task"], bg)
 
-            vals = [row["ff_task"], row["project_type"], row["project"], row["hours"], pct]
-            fmts = [None, None, None, "#,##0.00", "0.0%"]
+            vals = [row["ff_task"], row["project_type"], row["hours"], pct]
+            fmts = [None, None, "#,##0.00", "0.0%"]
             for c_idx, (val, fmt) in enumerate(zip(vals, fmts), 1):
                 cell = ws6.cell(row=r_idx, column=c_idx, value=val)
                 style_cell(cell, task_bg if c_idx == 1 else bg, fmt=fmt,
-                           align="right" if c_idx in (4,5) else "left")
+                           align="right" if c_idx in (3,4) else "left")
     else:
         ws6.cell(row=3, column=1, value="No Fixed Fee task data found. Check Billing Type and Task/Case columns.")
 
-    # ── 7. SKIPPED ROWS ──────────────────────────────────────
+    # ── 6. SKIPPED ROWS ──────────────────────────────────────
     ws7 = wb.create_sheet("Skipped Rows")
     ws7.sheet_properties.tabColor = "E74C3C"
     ws7.freeze_panes = "A3"
@@ -662,8 +628,8 @@ def main():
         st.divider()
 
         # Previews
-        tab1, tab2, tab3, tab4, tab5 = st.tabs(
-            ["By Employee", "By Project", "ZCO Non-Billable", "Task Analysis", "Detail"]
+        tab1, tab2, tab3, tab4 = st.tabs(
+            ["By Employee", "By Project", "ZCO Non-Billable", "Task Analysis"]
         )
 
         emp_region = {}
@@ -701,8 +667,8 @@ def main():
         with tab3:
             zco_df = df[df["credit_tag"] == "NON-BILLABLE"]
             if "task" in zco_df.columns and len(zco_df) > 0:
-                zco_sum = zco_df.groupby(["employee","period","task"], as_index=False
-                ).agg(hours=("hours","sum")).sort_values(["employee","period"])
+                zco_sum = zco_df.groupby(["task","employee","period"], as_index=False
+                ).agg(hours=("hours","sum")).sort_values(["task","employee","period"])
                 st.dataframe(zco_sum, use_container_width=True, hide_index=True)
             else:
                 st.info("No ZCO Non-Billable entries in this dataset.")
@@ -710,8 +676,8 @@ def main():
         with tab4:
             ff_df = df[df["ff_task"].notna()] if "ff_task" in df.columns else pd.DataFrame()
             if len(ff_df) > 0:
-                task_sum = ff_df.groupby(["project_type","ff_task"], as_index=False
-                ).agg(hours=("hours","sum")).sort_values(["project_type","ff_task"])
+                task_sum = ff_df.groupby(["ff_task","project_type"], as_index=False
+                ).agg(hours=("hours","sum")).sort_values(["ff_task","project_type"])
                 type_totals = ff_df.groupby("project_type")["hours"].sum()
                 task_sum["pct_of_type"] = task_sum.apply(
                     lambda r: f"{r['hours']/type_totals.get(r['project_type'],1)*100:.1f}%", axis=1)
@@ -746,7 +712,7 @@ def main():
             type="primary",
         )
         st.caption(f"`{filename}` — 6 tabs: Processed Data · By Employee · By Project · "
-                   f"Period vs Period · ZCO Non-Billable · Task Analysis")
+                   f"ZCO Non-Billable · Task Analysis · Skipped Rows")
 
 
 if __name__ == "__main__":
