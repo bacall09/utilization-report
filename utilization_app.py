@@ -742,7 +742,9 @@ def main():
             st.markdown(f"""
                 <div style='font-size:14px;color:#a0a0a0;font-family:Manrope,sans-serif;margin-bottom:4px'>Utilization Credits</div>
                 <div style='font-size:28px;font-weight:700;font-family:Manrope,sans-serif;line-height:1.2'>{total_credit:,.1f}</div>
-                <div style='font-size:13px;font-family:Manrope,sans-serif;color:{credit_color};margin-top:4px'>
+                <div style='display:inline-block;margin-top:6px;padding:2px 8px;border-radius:4px;
+                            background-color:{credit_color}33;
+                            font-size:13px;font-family:Manrope,sans-serif;color:{credit_color}'>
                     ↑ {credit_pct:.1%} of total hrs · {credit_label}
                 </div>
             """, unsafe_allow_html=True)
