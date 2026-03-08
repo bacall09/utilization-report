@@ -353,7 +353,7 @@ def build_excel(df, scope_map, consumed):
     ).agg(
         hours_this_period=("hours","sum"),
         credit_hrs=("credit_hrs","sum"),
-        overrun_hrs=("variance_hrs","sum"),
+        ff_overrun_hrs=("variance_hrs","sum"),
     ).sort_values(["employee","period"])
 
     emp_sum = emp_sum.merge(admin_hrs, on=["employee","period"], how="left")
