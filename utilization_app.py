@@ -628,8 +628,8 @@ def main():
         st.divider()
 
         # Previews
-        tab1, tab2, tab3, tab4 = st.tabs(
-            ["By Employee", "By Project", "ZCO Non-Billable", "Task Analysis"]
+        tab1, tab2, tab3, tab4, tab5 = st.tabs(
+            ["By Employee", "By Project", "ZCO Non-Billable", "Task Analysis", "Detail"]
         )
 
         emp_region = {}
