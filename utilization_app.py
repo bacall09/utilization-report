@@ -20,8 +20,8 @@ st.set_page_config(
 )
 
 # ── Constants ─────────────────────────────────────────────────────────────────
-NAVY     = "1F2D4E"
-TEAL     = "2A7F8A"
+NAVY     = "1e2c63"
+TEAL     = "4472C4"
 WHITE    = "FFFFFF"
 LTGRAY   = "F2F2F2"
 MID_GRAY = "BDC3C7"
@@ -103,10 +103,18 @@ def thin_border():
 def hdr_fill(hex_color):  return PatternFill("solid", fgColor=hex_color)
 def row_fill(hex_color):  return PatternFill("solid", fgColor=hex_color)
 
+GROUP_COLORS = ["EEF2FB", "FFFFFF"]  # alternating soft blue/white for grouped rows
+
+def group_bg(value, prev_value, group_idx):
+    """Return bg color and updated group index for grouped first-column display."""
+    if value != prev_value:
+        group_idx = 1 - group_idx  # toggle group
+    return GROUP_COLORS[group_idx], group_idx
+
 def style_header(ws, row, headers, fill_color=NAVY):
     for col, h in enumerate(headers, 1):
         c = ws.cell(row=row, column=col, value=h)
-        c.font      = Font(name="Arial", bold=True, color=WHITE, size=10)
+        c.font      = Font(name="Manrope", bold=True, color=WHITE, size=10)
         c.fill      = hdr_fill(fill_color)
         c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         c.border    = thin_border()
@@ -114,7 +122,7 @@ def style_header(ws, row, headers, fill_color=NAVY):
 
 def style_cell(cell, bg, fmt=None, bold=False, align="left"):
     cell.fill      = row_fill(bg)
-    cell.font      = Font(name="Arial", size=10, bold=bold)
+    cell.font      = Font(name="Manrope", size=10, bold=bold)
     cell.border    = thin_border()
     cell.alignment = Alignment(horizontal=align, vertical="center")
     if fmt:
@@ -123,7 +131,7 @@ def style_cell(cell, bg, fmt=None, bold=False, align="left"):
 def write_title(ws, title, ncols):
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncols)
     c = ws.cell(row=1, column=1, value=title)
-    c.font      = Font(name="Arial", bold=True, size=14, color=WHITE)
+    c.font      = Font(name="Manrope", bold=True, size=14, color=WHITE)
     c.fill      = hdr_fill(NAVY)
     c.alignment = Alignment(horizontal="center", vertical="center")
     ws.row_dimensions[1].height = 30
@@ -338,13 +346,15 @@ def build_excel(df, scope_map, consumed):
     emp_sum = emp_sum.merge(admin_hrs, on=["employee","period"], how="left")
     emp_sum["admin_hrs"] = emp_sum["admin_hrs"].fillna(0)
 
+    _prev_emp = None; _grp_idx = 0
     for r_idx, (_, row) in enumerate(emp_sum.iterrows(), 3):
         emp     = row["employee"]
         period  = row["period"]
         region  = emp_region.get(emp, "")
         avail   = get_avail_hours(region, period) if region else None
         util    = row["credit_hrs"] / avail if avail else 0
-        bg      = bgs[r_idx % 2]
+        bg, _grp_idx = group_bg(emp, _prev_emp, _grp_idx)
+        _prev_emp = emp
         util_bg = ("EAF9F1" if util >= 0.8 else "FEF9E7" if util >= 0.6 else "FDECED")
 
         vals = [emp, region, period, avail or "—",
@@ -383,6 +393,7 @@ def build_excel(df, scope_map, consumed):
     # HTD seed now comes directly from aggregation above
     htd_seeds = dict(zip(proj_sum["project"], proj_sum["htd_start"]))
 
+    _prev_ptype = None; _grp_idx_p = 0
     for r_idx, (_, row) in enumerate(proj_sum.iterrows(), 3):
         ptype   = str(row["project_type"]).strip()
         _pm     = [(k, float(v)) for k, v in scope_map.items() if k.strip().lower() in ptype.lower()]
@@ -402,7 +413,8 @@ def build_excel(df, scope_map, consumed):
         else:                        status = "—"
 
         status_bg = {"OVERRUN":"FDECED","AT RISK":"FEF9E7","ON TRACK":"EAF9F1"}.get(status, LTGRAY)
-        bg = bgs[r_idx % 2]
+        bg, _grp_idx_p = group_bg(ptype, _prev_ptype, _grp_idx_p)
+        _prev_ptype = ptype
 
         vals = [row["project"], ptype, scope_h or "—", row["htd_start"],
                 row["hours_this_period"], row["credit_hrs"], vari_h, updated_h,
@@ -439,14 +451,16 @@ def build_excel(df, scope_map, consumed):
 
         znh[3] = "Hours"
         # Update headers to include % col
-        ws5.cell(row=2, column=5, value="% of Total Hrs").font = Font(name="Arial", bold=True, color=WHITE, size=10)
+        ws5.cell(row=2, column=5, value="% of Total Hrs").font = Font(name="Manrope", bold=True, color=WHITE, size=10)
         ws5.cell(row=2, column=5).fill = hdr_fill(TEAL)
         ws5.cell(row=2, column=5).alignment = Alignment(horizontal="center", vertical="center")
         ws5.cell(row=2, column=5).border = thin_border()
         ws5.column_dimensions["E"].width = 16
 
+        _prev_task_z = None; _grp_idx_z = 0
         for r_idx, (_, row) in enumerate(zco_sum.iterrows(), 3):
-            bg         = bgs[r_idx % 2]
+            bg, _grp_idx_z = group_bg(row.get("task",""), _prev_task_z, _grp_idx_z)
+            _prev_task_z = row.get("task","")
             total_hrs  = emp_period_totals.get((row["employee"], row["period"]), 0)
             pct        = row["hours"] / total_hrs if total_hrs > 0 else 0
             vals = [row.get("task",""), row["employee"], row["period"], row["hours"], pct]
@@ -485,6 +499,7 @@ def build_excel(df, scope_map, consumed):
         # Total hours per type for % calc
         type_totals = ff_df.groupby("project_type")["hours"].sum().to_dict()
 
+        _prev_task_t = None; _grp_idx_t = 0
         for r_idx, (_, row) in enumerate(task_sum.iterrows(), 3):
             type_total = type_totals.get(row["project_type"], 0)
             pct        = row["hours"] / type_total if type_total > 0 else 0
@@ -500,6 +515,8 @@ def build_excel(df, scope_map, consumed):
                 "Post Go-live Support": "FEF9E7",
                 "Project Management":   "F4ECF7",
             }
+            bg, _grp_idx_t = group_bg(row["ff_task"], _prev_task_t, _grp_idx_t)
+            _prev_task_t = row["ff_task"]
             task_bg = task_colors.get(row["ff_task"], bg)
 
             vals = [row["ff_task"], row["project_type"], row["hours"], avg_hrs, pct]
@@ -531,8 +548,10 @@ def build_excel(df, scope_map, consumed):
         projects=("project", lambda x: ", ".join(sorted(x.unique())))
     ).sort_values(["project_type","billing_type"])
 
+    _prev_ptype_pc = None; _grp_idx_pc = 0
     for r_idx, (_, row) in enumerate(pc_sum.iterrows(), 3):
-        bg   = bgs[r_idx % 2]
+        bg, _grp_idx_pc = group_bg(row["project_type"], _prev_ptype_pc, _grp_idx_pc)
+        _prev_ptype_pc = row["project_type"]
         vals = [row["project_type"], row["billing_type"],
                 row["project_count"], row["projects"]]
         fmts = [None, None, "#,##0", None]
@@ -566,6 +585,20 @@ def build_excel(df, scope_map, consumed):
     else:
         ws7.cell(row=3, column=1, value="No skipped rows — all entries were processed.")
 
+    # ── Reorder sheets: Project Count first, Processed Data last ────────────
+    sheet_order = [
+        "Project Count",
+        "SUMMARY - By Employee",
+        "SUMMARY - By Project",
+        "ZCO Non-Billable",
+        "Task Analysis",
+        "Skipped Rows",
+        "PROCESSED_DATA",
+    ]
+    for i, name in enumerate(sheet_order):
+        if name in wb.sheetnames:
+            wb.move_sheet(name, offset=wb.sheetnames.index(name) - i)
+
     # Save
     buf = io.BytesIO()
     wb.save(buf)
@@ -576,9 +609,14 @@ def build_excel(df, scope_map, consumed):
 # ── Streamlit UI ──────────────────────────────────────────────────────────────
 def main():
     st.markdown("""
-        <div style='background-color:#1F2D4E;padding:24px 32px;border-radius:8px;margin-bottom:24px'>
-            <h1 style='color:white;margin:0;font-size:28px'>Utilization Credit Report</h1>
-            <p style='color:#aac4d0;margin:6px 0 0 0;font-size:14px'>
+        <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700&display=swap" rel="stylesheet">
+        <style>
+            html, body, [class*="css"] { font-family: 'Manrope', sans-serif !important; }
+            h1, h2, h3, .stMarkdown, .stDataFrame, label, button { font-family: 'Manrope', sans-serif !important; }
+        </style>
+        <div style='background-color:#1e2c63;padding:24px 32px;border-radius:8px;margin-bottom:24px;font-family:Manrope,sans-serif'>
+            <h1 style='color:white;margin:0;font-size:28px;font-family:Manrope,sans-serif'>Utilization Credit Report</h1>
+            <p style='color:#aac4d0;margin:6px 0 0 0;font-size:14px;font-family:Manrope,sans-serif'>
                 Upload your NetSuite time detail export to generate a utilization credit report.
             </p>
         </div>
