@@ -728,12 +728,28 @@ def main():
         total_admin    = df[df["billing_type"].str.lower() == "internal"]["hours"].sum()             if "billing_type" in df.columns else 0
         total_proj_overrun = df[df["credit_tag"] == "OVERRUN"]["variance_hrs"].sum()             if "variance_hrs" in df.columns else 0
 
+        credit_pct  = total_credit       / hours_this_period if hours_this_period else 0
+        overrun_pct = total_proj_overrun / hours_this_period if hours_this_period else 0
+        admin_pct   = total_admin        / hours_this_period if hours_this_period else 0
+
+        credit_color = "#2ecc71" if credit_pct >= 0.70 else "#f39c12" if credit_pct >= 0.60 else "#e74c3c"
+        credit_label = "On target" if credit_pct >= 0.70 else "Below target" if credit_pct >= 0.60 else "At risk"
+
         m1,m2,m3,m4,m5 = st.columns(5)
-        m1.metric("Rows Processed",          f"{total_rows:,}")
-        m2.metric("Hours This Period",        f"{hours_this_period:,.1f}")
-        m3.metric("Utilization Credits",      f"{total_credit:,.1f}")
-        m4.metric("Project Overrun Hrs",      f"{total_proj_overrun:,.1f}")
-        m5.metric("Admin Hrs",                f"{total_admin:,.1f}")
+        m1.metric("Rows Processed",    f"{total_rows:,}")
+        m2.metric("Hours This Period", f"{hours_this_period:,.1f}")
+        with m3:
+            st.markdown(f"""
+                <div style='font-size:14px;color:#a0a0a0;font-family:Manrope,sans-serif;margin-bottom:4px'>Utilization Credits</div>
+                <div style='font-size:28px;font-weight:700;font-family:Manrope,sans-serif;line-height:1.2'>{total_credit:,.1f}</div>
+                <div style='font-size:13px;font-family:Manrope,sans-serif;color:{credit_color};margin-top:4px'>
+                    ▲ {credit_pct:.1%} of total hrs &nbsp;·&nbsp; {credit_label}
+                </div>
+            """, unsafe_allow_html=True)
+        m4.metric("Project Overrun Hrs",  f"{total_proj_overrun:,.1f}",
+                  delta=f"{overrun_pct:.1%} of total hrs", delta_color="inverse")
+        m5.metric("Admin Hrs",            f"{total_admin:,.1f}",
+                  delta=f"{admin_pct:.1%} of total hrs", delta_color="off")
 
         st.markdown("**Credit Tag Breakdown**")
         tag_counts = df[df["credit_tag"] != "SKIPPED"]["credit_tag"].value_counts()
