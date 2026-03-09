@@ -43,7 +43,7 @@ TAG_BADGE = {
 
 # ── Stored scope map ──────────────────────────────────────────────────────────
 # ── PTO / Vacation keywords (matched against task/case column) ───────────────
-PTO_KEYWORDS = ["vacation", "pto", "sick"]
+PTO_KEYWORDS = ["vacation", "pto", "sick", "vacation/pto"]
 
 # ── Employees excluded from utilization targets ──────────────────────────────
 UTIL_EXEMPT_EMPLOYEES = ["swanson"]  # case-insensitive match
@@ -148,13 +148,9 @@ def get_avail_hours(region, period):
     return None
 
 def match_ff_task(task_val):
-    """Match a task value to one of the 4 standard FF task categories."""
-    t = str(task_val).strip().lower()
-    if "config" in t:             return "Configuration"
-    if "enabl" in t or "train" in t: return "Enablement/Training"
-    if "post" in t or "go-live" in t or "golive" in t: return "Post Go-live Support"
-    if "project mgmt" in t or "project management" in t or "pm" == t: return "Project Management"
-    return None
+    """Return raw task value for display — no categorization."""
+    t = str(task_val).strip()
+    return t if t and t.lower() not in ("", "nan", "none") else None
 
 # ── Excel helpers ─────────────────────────────────────────────────────────────
 def thin_border():
@@ -628,16 +624,12 @@ def build_excel(df, scope_map, consumed):
     else:
         zco_df = df[df["credit_tag"] == "NON-BILLABLE"].copy()
 
-    # Resolve task label — row-level: prefer task, fall back to case_task_event, then default
+    # task col already mapped from case/task/event via COL_MAP
     if len(zco_df) > 0:
         if "task" not in zco_df.columns:
-            zco_df["task"] = ""
-        if "case_task_event" in zco_df.columns:
-            # Fill blank task values from case_task_event row by row
-            mask = zco_df["task"].fillna("").str.strip() == ""
-            zco_df.loc[mask, "task"] = zco_df.loc[mask, "case_task_event"]
-        # Final fallback for anything still blank
-        zco_df["task"] = zco_df["task"].fillna("").replace("", "Internal (no task)")
+            zco_df["task"] = "Internal (no task)"
+        else:
+            zco_df["task"] = zco_df["task"].fillna("").replace("", "Internal (no task)")
 
     if "task" in zco_df.columns and len(zco_df) > 0:
         zco_sum = zco_df.groupby(
@@ -710,7 +702,7 @@ def build_excel(df, scope_map, consumed):
         task_sum = ff_df.groupby(
             ["ff_task","project_type"], as_index=False
         ).agg(
-            hours=("hours","sum"),
+            hours=("hours","sum")
         ).sort_values(["ff_task","project_type"])
 
         # Distinct project count per type using ALL fixed fee rows (not just task-tagged rows)
@@ -745,10 +737,11 @@ def build_excel(df, scope_map, consumed):
                 _prev_task_t = ff_task
                 _grp_idx_t = 0
             task_colors = {
-                "Configuration":        "EBF5FB",
-                "Enablement/Training":  "EAF9F1",
-                "Post Go-live Support": "FEF9E7",
-                "Project Management":   "F4ECF7",
+                "Configuration":          "EBF5FB",
+                "Post Go-Live Consulting": "FEF9E7",
+                "Project Management":     "F4ECF7",
+                "Training & UAT":         "EAF9F1",
+                "Customer Communication": "FDF2F8",
             }
             bg, _grp_idx_t = group_bg(ff_task, ff_task, _grp_idx_t)
             task_bg = task_colors.get(ff_task, bg)
@@ -828,7 +821,9 @@ def build_excel(df, scope_map, consumed):
     if len(ff_df) > 0:
         pta_sum = ff_df.groupby(
             ["project_type","ff_task"], as_index=False
-        ).agg(hours=("hours","sum")).sort_values(["project_type","ff_task"])
+        ).agg(hours=("hours","sum"))
+        pta_sum = pta_sum[pta_sum["ff_task"].notna() & (pta_sum["ff_task"] != "")]
+        pta_sum = pta_sum.sort_values(["project_type","ff_task"])
 
         # Distinct project count per type (all FF rows)
         _all_ff_pta = df[df["billing_type"].fillna("").str.lower() == "fixed fee"]             if "billing_type" in df.columns else df.copy()
@@ -863,10 +858,11 @@ def build_excel(df, scope_map, consumed):
                 _grp_idx_pta = 0
 
             task_colors = {
-                "Configuration":        "EBF5FB",
-                "Enablement/Training":  "EAF9F1",
-                "Post Go-live Support": "FEF9E7",
-                "Project Management":   "F4ECF7",
+                "Configuration":          "EBF5FB",
+                "Post Go-Live Consulting": "FEF9E7",
+                "Project Management":     "F4ECF7",
+                "Training & UAT":         "EAF9F1",
+                "Customer Communication": "FDF2F8",
             }
             bg_pta, _grp_idx_pta = group_bg(ptype_pta, ptype_pta, _grp_idx_pta)
             task_bg_pta = task_colors.get(ff_task_pta, bg_pta)
