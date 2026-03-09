@@ -672,6 +672,79 @@ def build_excel(df, scope_map, consumed):
             cell.number_format = fmt
 
     # ── 7. CUSTOMER REGION SUMMARY ───────────────────────────
+    # ── FF PROJECT TYPE ANALYSIS ─────────────────────────────
+    ws_pta = wb.create_sheet("FF Project Type Analysis")
+    ws_pta.sheet_properties.tabColor = "8E44AD"
+    ws_pta.freeze_panes = "A4"
+
+    ptah = ["Project Type","Task Category","Hours This Period","Avg Hrs / Project","% of Type Hrs"]
+    ptaw = [28,25,16,18,16]
+    write_title(ws_pta, "FF PROJECT TYPE ANALYSIS — Hours by Project Type › Task", len(ptah))
+    style_header(ws_pta, 2, ptah, TEAL)
+    ws_pta.auto_filter.ref = "A2:E2"
+    ws_pta.cell(row=3, column=1,
+        value="Grouped by Project Type → Task Category").font = Font(
+        name="Manrope", size=9, italic=True, color="808080")
+    for i, w in enumerate(ptaw, 1):
+        ws_pta.column_dimensions[get_column_letter(i)].width = w
+
+    if len(ff_df) > 0:
+        pta_sum = ff_df.groupby(
+            ["project_type","ff_task"], as_index=False
+        ).agg(hours=("hours","sum")).sort_values(["project_type","ff_task"])
+
+        # Distinct project count per type (all FF rows)
+        _all_ff_pta = df[df["billing_type"].fillna("").str.lower() == "fixed fee"]             if "billing_type" in df.columns else df.copy()
+        _proj_count_pta = _all_ff_pta.groupby("project_type")["project"].nunique().to_dict()
+        _type_totals_pta = ff_df.groupby("project_type")["hours"].sum().to_dict()
+
+        _prev_ptype_pta = None; _grp_idx_pta = 0; r_idx_pta = 4
+        for _, row in pta_sum.iterrows():
+            ptype_pta   = row["project_type"]
+            ff_task_pta = row["ff_task"]
+            type_total  = _type_totals_pta.get(ptype_pta, 0)
+            pct         = row["hours"] / type_total if type_total > 0 else 0
+            proj_cnt    = _proj_count_pta.get(ptype_pta, 1)
+            raw_avg     = row["hours"] / proj_cnt if proj_cnt > 0 else 0
+            avg_hrs     = round(raw_avg * 4) / 4
+
+            # Navy section header when project type changes
+            if ptype_pta != _prev_ptype_pta:
+                _ptype_total = pta_sum[pta_sum["project_type"]==ptype_pta]["hours"].sum()
+                for ci, (hval, hfmt) in enumerate([
+                    (ptype_pta, None), ("— ALL TASKS —", None),
+                    (_ptype_total, "#,##0.00"), ("", None), ("", None)], 1):
+                    hcell = ws_pta.cell(row=r_idx_pta, column=ci, value=hval)
+                    hcell.font   = Font(name="Manrope", size=10, bold=True, color="FFFFFF")
+                    hcell.fill   = PatternFill("solid", fgColor=NAVY)
+                    hcell.border = thin_border()
+                    hcell.alignment = Alignment(
+                        horizontal="right" if ci==3 else "left", vertical="center")
+                    if hfmt: hcell.number_format = hfmt
+                r_idx_pta += 1
+                _prev_ptype_pta = ptype_pta
+                _grp_idx_pta = 0
+
+            task_colors = {
+                "Configuration":        "EBF5FB",
+                "Enablement/Training":  "EAF9F1",
+                "Post Go-live Support": "FEF9E7",
+                "Project Management":   "F4ECF7",
+            }
+            bg_pta, _grp_idx_pta = group_bg(ptype_pta, ptype_pta, _grp_idx_pta)
+            task_bg_pta = task_colors.get(ff_task_pta, bg_pta)
+
+            vals = ["", ff_task_pta, row["hours"], avg_hrs, pct]
+            fmts = [None, None, "#,##0.00", "#,##0.00", "0.0%"]
+            for c_idx, (val, fmt) in enumerate(zip(vals, fmts), 1):
+                cell = ws_pta.cell(row=r_idx_pta, column=c_idx, value=val)
+                style_cell(cell, task_bg_pta if c_idx > 1 else bg_pta, fmt=fmt,
+                           align="right" if c_idx > 2 else "left")
+            r_idx_pta += 1
+    else:
+        ws_pta.cell(row=4, column=1, value="No Fixed Fee task data available.")
+
+
     ws_cr = wb.create_sheet("By Customer Region")
     ws_cr.sheet_properties.tabColor = "1e2c63"
     ws_cr.freeze_panes = "A3"
@@ -1132,6 +1205,7 @@ def build_excel(df, scope_map, consumed):
         "Watch List",
         "ZCO Non-Billable",
         "Task Analysis",
+        "FF Project Type Analysis",
         "Skipped Rows",
         "PROCESSED_DATA",
     ]
@@ -1167,13 +1241,6 @@ def main():
     """, unsafe_allow_html=True)
 
     # ── Adaptive metric color CSS ────────────────────────────
-    st.markdown("""<style>
-    :root { --text-color: #111111; }
-    [data-theme="dark"] { --text-color: #ffffff !important; }
-    [data-theme="light"] { --text-color: #111111 !important; }
-    @media (prefers-color-scheme: dark) { :root { --text-color: #ffffff; } }
-    </style>""", unsafe_allow_html=True)
-
     # ── Upload ────────────────────────────────────────────────
     st.subheader("Step 1 — Upload NetSuite Time Detail Export")
     st.caption("Supported columns: Employee, Region, Project, Project Type, Billing Type, "
@@ -1261,7 +1328,7 @@ def main():
             pill = ""
             if pill_txt and pill_fg:
                 pill = f"<div style='display:inline-block;margin-top:6px;padding:2px 10px;border-radius:999px;background-color:{pill_fg}33;font-size:13px;font-family:Manrope,sans-serif;color:{pill_fg}'>&#8593; {pill_txt}</div>"
-            return f"<div style='font-size:14px;color:#a0a0a0;font-family:Manrope,sans-serif;margin-bottom:4px'>{label}</div><div style='font-size:36px;font-weight:700;color:var(--text-color,#1a1a1a);font-family:Manrope,sans-serif;line-height:1.1'>{value}</div>{pill}"
+            return f"<div style='font-size:14px;color:#a0a0a0;font-family:Manrope,sans-serif;margin-bottom:4px'>{label}</div><div style='font-size:36px;font-weight:700;color:inherit;font-family:Manrope,sans-serif;line-height:1.1'>{value}</div>{pill}"
 
         m1,m2,m3,m4,m5 = st.columns(5)
         with m1: st.markdown(metric_card("Projects This Period",   f"{df[df['billing_type'].fillna('').str.lower() != 'internal'].groupby(['project','project_type']).ngroups:,}"), unsafe_allow_html=True)
