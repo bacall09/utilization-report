@@ -216,6 +216,9 @@ def auto_detect_columns(df):
         "region":           ["location", "region", "country", "office"],
         "customer_region":  ["customer region", "customer_region", "cust region", "client region"],
         "project_manager":  ["project manager", "project_manager", "pm", "manager"],
+        "project_phase":    ["project phase", "phase", "project_phase", "stage"],
+        "start_date":       ["start date", "project start date", "start_date",
+                             "project start", "commenced"],
     }
     mapping = {}
     unmatched = []
@@ -243,6 +246,8 @@ def assign_credits(df, scope_map):
     df["hours"]  = pd.to_numeric(df["hours"], errors="coerce").fillna(0)
     df["date"]   = pd.to_datetime(df["date"], errors="coerce")
     df["period"] = df["date"].dt.strftime("%Y-%m").fillna("Unknown")
+    if "start_date" in df.columns:
+        df["start_date"] = pd.to_datetime(df["start_date"], errors="coerce")
     # Backfill location from hardcoded lookup when column is missing or blank
     if "region" not in df.columns:
         df["region"] = ""
@@ -383,12 +388,14 @@ def build_excel(df, scope_map, consumed):
     headers = ["Employee","Location","Customer Region","Project Manager","Project",
                "Project Type","Billing Type","Hrs to Date","Date","Hours Logged",
                "Approval","Task/Case","Non-Billable","Credit Hrs","Variance Hrs",
-               "Previous Hrs to Date","Credit Tag","Period","Notes"]
-    widths  = [20,16,18,20,35,20,14,13,14,13,14,25,13,12,12,18,16,12,45]
+               "Previous Hrs to Date","Credit Tag","Period","Notes",
+               "Project Phase","Start Date","Days Active"]
+    widths  = [20,16,18,20,35,20,14,13,14,13,14,25,13,12,12,18,16,12,45,16,14,12]
     cols    = ["employee","region","customer_region","project_manager","project",
                "project_type","billing_type","hours_to_date","date","hours",
                "approval","task","non_billable","credit_hrs","variance_hrs",
-               "previous_htd","credit_tag","period","notes"]
+               "previous_htd","credit_tag","period","notes",
+               "project_phase","start_date_display","days_active"]
 
     write_title(ws, "PROCESSED DATA — Utilization Credit Detail", len(headers))
     style_header(ws, 2, headers, TEAL)
@@ -497,12 +504,13 @@ def build_excel(df, scope_map, consumed):
     ws3.freeze_panes = "A3"
 
     ph = ["Project","Project Type","Customer Region","Project Manager",
+          "Project Phase","Start Date","Days Active",
           "Scoped Hrs","Previous Hrs to Date","Hours This Period","Credit Hrs",
           "FF Project Overrun Hrs","Hours to Date","Hours Balance","Burn %","Status"]
-    pw = [35,20,18,20,12,15,15,12,18,18,20,10,12]
+    pw = [35,20,18,20,14,14,12,12,15,15,12,18,18,16,10,12]
     write_title(ws3, "SUMMARY — Utilization by Project", len(ph))
     style_header(ws3, 2, ph, TEAL)
-    ws3.auto_filter.ref = "A2:M2"
+    ws3.auto_filter.ref = "A2:P2"
 
     for i, w in enumerate(pw, 1):
         ws3.column_dimensions[get_column_letter(i)].width = w
@@ -532,6 +540,26 @@ def build_excel(df, scope_map, consumed):
         proj_cust_region = df.dropna(subset=["customer_region"]).groupby("project")["customer_region"].first().to_dict()
     if "project_manager" in df.columns:
         proj_pm = df.dropna(subset=["project_manager"]).groupby("project")["project_manager"].first().to_dict()
+    proj_phase = {}
+    if "project_phase" in df.columns:
+        proj_phase = df.dropna(subset=["project_phase"]).groupby("project")["project_phase"].first().to_dict()
+    proj_start = {}
+    if "start_date" in df.columns:
+        proj_start = df.dropna(subset=["start_date"]).groupby("project")["start_date"].min().to_dict()
+    # Max date in import = "as of" date for Days Active calc
+    _as_of = pd.to_datetime(df["date"], errors="coerce").max() if "date" in df.columns else pd.Timestamp.now()
+    # Add project_phase, start_date, days_active columns to df for PROCESSED_DATA
+    df["project_phase"] = df["project"].map(proj_phase) if proj_phase else ""
+    if proj_start:
+        df["start_date_mapped"] = df["project"].map(proj_start)
+        df["days_active"] = df["start_date_mapped"].apply(
+            lambda s: int((_as_of - s).days) if pd.notna(s) and pd.notna(_as_of) else None)
+        # Use mapped start_date for display
+        df["start_date_display"] = df["start_date_mapped"]
+    else:
+        df["start_date_display"] = df.get("start_date", None)
+        df["days_active"] = None
+
 
     _prev_ptype = None; _grp_idx_p = 0
     for r_idx, (_, row) in enumerate(proj_sum.iterrows(), 3):
@@ -557,18 +585,21 @@ def build_excel(df, scope_map, consumed):
         bg, _grp_idx_p = group_bg(ptype, _prev_ptype, _grp_idx_p)
         _prev_ptype = ptype
 
-        cust_reg = proj_cust_region.get(row["project"], "")
-        pm_name  = proj_pm.get(row["project"], "")
+        cust_reg   = proj_cust_region.get(row["project"], "")
+        pm_name    = proj_pm.get(row["project"], "")
+        phase      = proj_phase.get(row["project"], "")
+        start_dt   = proj_start.get(row["project"])
+        days_active = int((_as_of - start_dt).days) if pd.notna(start_dt) and pd.notna(_as_of) else "—"
         vals = [row["project"], ptype, cust_reg, pm_name, scope_h or "—", previous_h,
                 row["hours_this_period"], row["credit_hrs"], vari_h,
                 previous_h + row["hours_this_period"],
                 scope_h - (previous_h + row["hours_this_period"]) if scope_h > 0 else "—",
                 burn if scope_h > 0 else "—", status]
-        fmts = [None,None,None,None,"#,##0.00","#,##0.00","#,##0.00","#,##0.00","#,##0.00","#,##0.00","#,##0.00","0.0%",None]
+        fmts = [None,None,None,None,None,"DD-MMM-YYYY",None,"#,##0.00","#,##0.00","#,##0.00","#,##0.00","#,##0.00","#,##0.00","#,##0.00","0.0%",None]
 
         for c_idx, (val, fmt) in enumerate(zip(vals, fmts), 1):
             cell = ws3.cell(row=r_idx, column=c_idx, value=val)
-            style_cell(cell, status_bg if c_idx == 13 else bg,
+            style_cell(cell, status_bg if c_idx == 16 else bg,
                        fmt=fmt, bold=(c_idx == 12),
                        align="right" if c_idx in (5,6,7,8,9,10,11) else "center" if c_idx == 12 else "left")
 
@@ -592,15 +623,16 @@ def build_excel(df, scope_map, consumed):
     else:
         zco_df = df[df["credit_tag"] == "NON-BILLABLE"].copy()
 
-    # Resolve task label — prefer task col, fall back to case_task_event
+    # Resolve task label — row-level: prefer task, fall back to case_task_event, then default
     if len(zco_df) > 0:
-        if "task" not in zco_df.columns or zco_df["task"].fillna("").str.strip().eq("").all():
-            if "case_task_event" in zco_df.columns:
-                zco_df["task"] = zco_df["case_task_event"].fillna("Internal (no task)")
-            else:
-                zco_df["task"] = "Internal (no task)"
-        else:
-            zco_df["task"] = zco_df["task"].fillna("Internal (no task)")
+        if "task" not in zco_df.columns:
+            zco_df["task"] = ""
+        if "case_task_event" in zco_df.columns:
+            # Fill blank task values from case_task_event row by row
+            mask = zco_df["task"].fillna("").str.strip() == ""
+            zco_df.loc[mask, "task"] = zco_df.loc[mask, "case_task_event"]
+        # Final fallback for anything still blank
+        zco_df["task"] = zco_df["task"].fillna("").replace("", "Internal (no task)")
 
     if "task" in zco_df.columns and len(zco_df) > 0:
         zco_sum = zco_df.groupby(
@@ -1005,8 +1037,9 @@ def build_excel(df, scope_map, consumed):
 
     # Section A: Top 10 overrun projects
     wlh = ["Project","Project Type","Customer Region","Project Manager",
+           "Project Phase","Start Date","Days Active",
            "Scoped Hrs","Previous Hrs to Date","Hours to Date","Hours Balance","Burn %","FF Overrun Hrs","Status"]
-    wlw = [35,20,18,20,12,18,14,20,10,14,12]
+    wlw = [35,20,18,20,14,14,12,12,18,14,16,10,14,12]
     write_title(ws_wl, "PROJECT WATCH LIST — Overrun & At-Risk Projects", len(wlh))
     style_header(ws_wl, 2, wlh, "E74C3C")
     for i, w in enumerate(wlw, 1):
@@ -1046,18 +1079,25 @@ def build_excel(df, scope_map, consumed):
         status_bg = "FDECED" if status == "OVERRUN" else "FEF9E7"
         bg       = status_bg
         burn_val = row["burn_pct"] if row["burn_pct"] is not None else "—"
-        cust_reg = proj_cust_region.get(row["project"], "")
-        pm_name  = proj_pm.get(row["project"], "")
-        _htd_wl = row["previous_htd"] + row["hours_this_period"]
-        _tot_ov  = row["scope_h"] - _htd_wl if row["scope_h"] and row["scope_h"] > 0 else "—"
+        cust_reg   = proj_cust_region.get(row["project"], "")
+        pm_name    = proj_pm.get(row["project"], "")
+        phase      = proj_phase.get(row["project"], "")
+        start_dt   = proj_start.get(row["project"])
+        days_active = int((_as_of - start_dt).days) if pd.notna(start_dt) and pd.notna(_as_of) else "—"
+        _htd_wl    = row["previous_htd"] + row["hours_this_period"]
+        _tot_ov    = row["scope_h"] - _htd_wl if row["scope_h"] and row["scope_h"] > 0 else "—"
+        _phase_wl  = proj_phase.get(row["project"], "")
+        _start_wl  = proj_start.get(row["project"])
+        _days_wl   = int((_as_of - _start_wl).days) if pd.notna(_start_wl) and pd.notna(_as_of) else "—"
         vals = [row["project"], row["project_type"], cust_reg, pm_name,
+                _phase_wl, _start_wl, _days_wl,
                 row["scope_h"] or "—", row["previous_htd"],
                 _htd_wl, _tot_ov,
                 burn_val, row["variance_hrs"], status]
-        fmts = [None,None,None,None,"#,##0.00","#,##0.00","#,##0.00","#,##0.00","0.0%","#,##0.00",None]
+        fmts = [None,None,None,None,None,"DD-MMM-YYYY",None,"#,##0.00","#,##0.00","#,##0.00","#,##0.00","0.0%","#,##0.00",None]
         for c_idx, (val, fmt) in enumerate(zip(vals, fmts), 1):
             cell = ws_wl.cell(row=r_idx, column=c_idx, value=val)
-            style_cell(cell, status_bg if c_idx == 11 else bg, fmt=fmt,
+            style_cell(cell, status_bg if c_idx == 14 else bg, fmt=fmt,
                        bold=(c_idx == 9),
                        align="right" if c_idx in (5,6,7,8) else "center" if c_idx == 9 else "left")
         r_idx += 1
