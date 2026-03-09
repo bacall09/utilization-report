@@ -413,8 +413,8 @@ def build_excel(df, scope_map, consumed):
     ws3.freeze_panes = "A3"
 
     ph = ["Project","Project Type","Customer Region","Project Manager",
-          "Scoped Hrs","Hours to Date","Hours This Period","Credit Hrs",
-          "FF Project Overrun Hrs","Previous Hrs to Date","Burn %","Status"]
+          "Scoped Hrs","Previous Hrs to Date","Hours This Period","Credit Hrs",
+          "FF Project Overrun Hrs","Hours to Date","Burn %","Status"]
     pw = [35,20,18,20,12,15,15,12,18,18,10,12]
     write_title(ws3, "SUMMARY — Utilization by Project", len(ph))
     style_header(ws3, 2, ph, TEAL)
@@ -476,7 +476,8 @@ def build_excel(df, scope_map, consumed):
         cust_reg = proj_cust_region.get(row["project"], "")
         pm_name  = proj_pm.get(row["project"], "")
         vals = [row["project"], ptype, cust_reg, pm_name, scope_h or "—", previous_h,
-                row["hours_this_period"], row["credit_hrs"], vari_h, seed,
+                row["hours_this_period"], row["credit_hrs"], vari_h,
+                previous_h + row["hours_this_period"],
                 burn if scope_h > 0 else "—", status]
         fmts = [None,None,None,None,"#,##0.00","#,##0.00","#,##0.00","#,##0.00","#,##0.00","#,##0.00","0.0%",None]
 
@@ -846,7 +847,9 @@ def build_excel(df, scope_map, consumed):
         htd_start=("htd_start","first"),
     )
     wl_df["previous_htd"] = wl_df.apply(
-        lambda r: max(0, (float(r["htd_start"]) if r["htd_start"] else 0) - r["hours_this_period"]), axis=1)
+        lambda r: max(0.0, (float(r["htd_start"]) if r["htd_start"] else 0.0) - r["hours_this_period"]), axis=1)
+    wl_df["hours_to_date"] = wl_df.apply(
+        lambda r: (float(r["htd_start"]) if r["htd_start"] else 0.0), axis=1)
 
     def get_scope(ptype):
         _pm = [(k, float(v)) for k, v in scope_map.items() if k.strip().lower() in str(ptype).strip().lower()]
