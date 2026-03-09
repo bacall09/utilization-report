@@ -1442,6 +1442,17 @@ def main():
                 st.error(f"Processing error: {e}"); return
 
         st.success("✅ Processing complete!")
+        with st.expander("🔍 Debug: Column Detection", expanded=False):
+            _dbg_map, _ = auto_detect_columns(df_raw)
+            st.write("**Raw file columns:**", list(df_raw.columns))
+            st.write("**Detected mapping:**", _dbg_map)
+            _task_col_raw = next((c for c in df_raw.columns if c.lower().strip() == "case/task/event"), None)
+            st.write("**Task col in raw file:**", _task_col_raw)
+            if "task" in df.columns:
+                st.write("**Unique task values (first 15):**", df["task"].dropna().unique()[:15].tolist())
+                st.write("**Null task count:**", int(df["task"].isna().sum()))
+            else:
+                st.error("'task' column NOT found in processed df")
 
         # ── Warn on unmapped employees ────────────────────────
         _unmapped = []
