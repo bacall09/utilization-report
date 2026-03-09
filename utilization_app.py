@@ -1169,22 +1169,10 @@ def main():
     # ── Adaptive metric color CSS ────────────────────────────
     st.markdown("""<style>
     :root { --text-color: #111111; }
+    [data-theme="dark"] { --text-color: #ffffff !important; }
+    [data-theme="light"] { --text-color: #111111 !important; }
     @media (prefers-color-scheme: dark) { :root { --text-color: #ffffff; } }
-    [data-theme="dark"], [data-theme="dark"] * { --text-color: #ffffff; }
-    [data-theme="light"], [data-theme="light"] * { --text-color: #111111; }
-    /* Streamlit dark mode body class fallback */
-    .stApp[data-theme="dark"] { --text-color: #ffffff; }
-    </style>
-    <script>
-    function fixMetricColors() {
-        const theme = document.documentElement.getAttribute('data-theme') ||
-                      (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
-        const color = theme === 'dark' ? '#ffffff' : '#111111';
-        document.documentElement.style.setProperty('--text-color', color);
-    }
-    fixMetricColors();
-    new MutationObserver(fixMetricColors).observe(document.documentElement, {attributes: true});
-    </script>""", unsafe_allow_html=True)
+    </style>""", unsafe_allow_html=True)
 
     # ── Upload ────────────────────────────────────────────────
     st.subheader("Step 1 — Upload NetSuite Time Detail Export")
