@@ -458,7 +458,7 @@ def build_excel(df, scope_map, consumed):
         seed      = float(row["htd_start"]) if row["htd_start"] else 0
         # htd_start already includes hours this period (per NetSuite export)
         # Previous HTD = htd_start minus hours booked this period
-        previous_h = seed - row["hours_this_period"]
+        previous_h = max(0.0, seed - row["hours_this_period"])
 
         # Burn % = htd_start / scoped hrs (htd_start includes this period)
         burn = seed / scope_h if scope_h > 0 else 0
@@ -1013,7 +1013,7 @@ def build_excel(df, scope_map, consumed):
         ("Util % (target 70%)", util_pct_d, "0.0%", util_status_d),
         ("FF Overrun Hrs", overrun_hrs_d, "#,##0.00", None),
         ("Admin Hrs", admin_hrs_d, "#,##0.00", None),
-        ("Rows Processed", total_rows_d, "#,##0", None),
+        ("Projects This Period", df[df["credit_tag"] != "SKIPPED"]["project"].nunique(), "#,##0", None),
     ]):
         col = 2 + i
         dash_label(ws_dash, 7, col, label)
@@ -1257,7 +1257,6 @@ def main():
             date_str = "—"
         st.markdown(f"<div style='font-size:13px;color:#a0a0a0;font-family:Manrope,sans-serif;margin-bottom:12px'>Data through <strong style='color:#ffffff'>{date_str}</strong></div>", unsafe_allow_html=True)
 
-        m1,m2,m3,m4,m5 = st.columns(5)
         def metric_card(label, value, pill_txt=None, pill_fg=None):
             pill = ""
             if pill_txt and pill_fg:
