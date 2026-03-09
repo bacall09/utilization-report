@@ -42,6 +42,9 @@ TAG_BADGE = {
 }
 
 # ── Stored scope map ──────────────────────────────────────────────────────────
+# ── PTO / Vacation keywords (matched against task/case column) ───────────────
+PTO_KEYWORDS = ["vacation", "pto", "sick"]
+
 # ── Employees excluded from utilization targets ──────────────────────────────
 UTIL_EXEMPT_EMPLOYEES = ["swanson"]  # case-insensitive match
 
@@ -417,11 +420,11 @@ def build_excel(df, scope_map, consumed):
     ws2.freeze_panes = "A3"
 
     eh = ["Employee","Location","Period",
-          "Avail Hrs","Hours This Period","Utilization Credits","FF Project Overrun Hrs","Admin Hrs","Util %"]
-    ew = [22,16,12,12,15,18,18,14,10]
+          "Avail Hrs","Hours This Period","Utilization Credits","FF Project Overrun Hrs","Admin Hrs","Util %","Notes"]
+    ew = [22,16,12,12,15,18,18,14,10,28]
     write_title(ws2, "SUMMARY — Utilization by Employee", len(eh))
     style_header(ws2, 2, eh, TEAL)
-    ws2.auto_filter.ref = "A2:I2"
+    ws2.auto_filter.ref = "A2:J2"
 
     for i, w in enumerate(ew, 1):
         ws2.column_dimensions[get_column_letter(i)].width = w
@@ -452,6 +455,15 @@ def build_excel(df, scope_map, consumed):
     emp_sum = emp_sum.merge(admin_hrs, on=["employee","period"], how="left")
     emp_sum["admin_hrs"] = emp_sum["admin_hrs"].fillna(0)
 
+    # PTO hours per employee+period
+    _pto_lookup = {}
+    if "task" in df.columns or "case_task_event" in df.columns:
+        _task_col = "task" if "task" in df.columns else "case_task_event"
+        _pto_mask = df[_task_col].fillna("").str.lower().apply(
+            lambda t: any(k in t for k in PTO_KEYWORDS))
+        _pto_df = df[_pto_mask].groupby(["employee","period"])["hours"].sum()
+        _pto_lookup = {(emp, per): hrs for (emp, per), hrs in _pto_df.items()}
+
     _prev_emp = None; _grp_idx = 0
     for r_idx, (_, row) in enumerate(emp_sum.iterrows(), 3):
         emp     = row["employee"]
@@ -463,16 +475,21 @@ def build_excel(df, scope_map, consumed):
         _prev_emp = emp
         util_bg = ("EAF9F1" if util >= 0.8 else "FEF9E7" if util >= 0.6 else "FDECED")
 
+        _pto_hrs = _pto_lookup.get((emp, period), 0)
+        _note = f"⚠ {_pto_hrs:.2f} hrs Vacation/PTO/Sick" if _pto_hrs > 0 else ""
         vals = [emp, region, period, avail or "—",
                 row["hours_this_period"], row["credit_hrs"],
                 row["ff_overrun_hrs"], row.get("admin_hrs", 0),
-                util if avail else "—"]
+                util if avail else "—", _note]
         fmts = [None,None,None,"#,##0.00","#,##0.00","#,##0.00","#,##0.00","#,##0.00","0.0%"]
 
         for c_idx, (val, fmt) in enumerate(zip(vals, fmts), 1):
             cell = ws2.cell(row=r_idx, column=c_idx, value=val)
-            style_cell(cell, util_bg if c_idx == 9 else bg, fmt=fmt,
-                       align="right" if c_idx > 3 else "center" if c_idx == 3 else "left")
+            _cell_bg = (util_bg if c_idx == 9
+                        else "FEF9E7" if c_idx == 10 and _note
+                        else bg)
+            style_cell(cell, _cell_bg, fmt=fmt,
+                       align="right" if 3 < c_idx < 10 else "center" if c_idx == 3 else "left")
 
     # ── 3. PROJECT SUMMARY ────────────────────────────────────
     ws3 = wb.create_sheet("SUMMARY - By Project")
@@ -481,11 +498,11 @@ def build_excel(df, scope_map, consumed):
 
     ph = ["Project","Project Type","Customer Region","Project Manager",
           "Scoped Hrs","Previous Hrs to Date","Hours This Period","Credit Hrs",
-          "FF Project Overrun Hrs","Hours to Date","Burn %","Status"]
-    pw = [35,20,18,20,12,15,15,12,18,18,10,12]
+          "FF Project Overrun Hrs","Hours to Date","Total FF Overrun Hrs","Burn %","Status"]
+    pw = [35,20,18,20,12,15,15,12,18,18,20,10,12]
     write_title(ws3, "SUMMARY — Utilization by Project", len(ph))
     style_header(ws3, 2, ph, TEAL)
-    ws3.auto_filter.ref = "A2:L2"
+    ws3.auto_filter.ref = "A2:M2"
 
     for i, w in enumerate(pw, 1):
         ws3.column_dimensions[get_column_letter(i)].width = w
@@ -545,12 +562,13 @@ def build_excel(df, scope_map, consumed):
         vals = [row["project"], ptype, cust_reg, pm_name, scope_h or "—", previous_h,
                 row["hours_this_period"], row["credit_hrs"], vari_h,
                 previous_h + row["hours_this_period"],
+                (previous_h + row["hours_this_period"]) - scope_h if scope_h > 0 else "—",
                 burn if scope_h > 0 else "—", status]
-        fmts = [None,None,None,None,"#,##0.00","#,##0.00","#,##0.00","#,##0.00","#,##0.00","#,##0.00","0.0%",None]
+        fmts = [None,None,None,None,"#,##0.00","#,##0.00","#,##0.00","#,##0.00","#,##0.00","#,##0.00","#,##0.00","0.0%",None]
 
         for c_idx, (val, fmt) in enumerate(zip(vals, fmts), 1):
             cell = ws3.cell(row=r_idx, column=c_idx, value=val)
-            style_cell(cell, status_bg if c_idx == 12 else bg,
+            style_cell(cell, status_bg if c_idx == 13 else bg,
                        fmt=fmt, bold=(c_idx == 12),
                        align="right" if c_idx in (5,6,7,8,9,10,11) else "center" if c_idx == 12 else "left")
 
@@ -568,7 +586,22 @@ def build_excel(df, scope_map, consumed):
     for i, w in enumerate(znw, 1):
         ws5.column_dimensions[get_column_letter(i)].width = w
 
-    zco_df = df[df["credit_tag"] == "NON-BILLABLE"].copy()
+    # Use billing_type == internal as primary filter (reliable regardless of Non-Billable flag)
+    if "billing_type" in df.columns:
+        zco_df = df[df["billing_type"].fillna("").str.lower() == "internal"].copy()
+    else:
+        zco_df = df[df["credit_tag"] == "NON-BILLABLE"].copy()
+
+    # Resolve task label — prefer task col, fall back to case_task_event
+    if len(zco_df) > 0:
+        if "task" not in zco_df.columns or zco_df["task"].fillna("").str.strip().eq("").all():
+            if "case_task_event" in zco_df.columns:
+                zco_df["task"] = zco_df["case_task_event"].fillna("Internal (no task)")
+            else:
+                zco_df["task"] = "Internal (no task)"
+        else:
+            zco_df["task"] = zco_df["task"].fillna("Internal (no task)")
+
     if "task" in zco_df.columns and len(zco_df) > 0:
         zco_sum = zco_df.groupby(
             ["task","employee","period"], as_index=False
@@ -972,8 +1005,8 @@ def build_excel(df, scope_map, consumed):
 
     # Section A: Top 10 overrun projects
     wlh = ["Project","Project Type","Customer Region","Project Manager",
-           "Scoped Hrs","Previous Hrs to Date","Burn %","FF Overrun Hrs","Status"]
-    wlw = [35,20,18,20,12,18,10,14,12]
+           "Scoped Hrs","Previous Hrs to Date","Hours to Date","Total FF Overrun Hrs","Burn %","FF Overrun Hrs","Status"]
+    wlw = [35,20,18,20,12,18,14,20,10,14,12]
     write_title(ws_wl, "PROJECT WATCH LIST — Overrun & At-Risk Projects", len(wlh))
     style_header(ws_wl, 2, wlh, "E74C3C")
     for i, w in enumerate(wlw, 1):
@@ -1015,13 +1048,16 @@ def build_excel(df, scope_map, consumed):
         burn_val = row["burn_pct"] if row["burn_pct"] is not None else "—"
         cust_reg = proj_cust_region.get(row["project"], "")
         pm_name  = proj_pm.get(row["project"], "")
+        _htd_wl = row["previous_htd"] + row["hours_this_period"]
+        _tot_ov  = _htd_wl - row["scope_h"] if row["scope_h"] and row["scope_h"] > 0 else "—"
         vals = [row["project"], row["project_type"], cust_reg, pm_name,
                 row["scope_h"] or "—", row["previous_htd"],
+                _htd_wl, _tot_ov,
                 burn_val, row["variance_hrs"], status]
-        fmts = [None,None,None,None,"#,##0.00","#,##0.00","0.0%","#,##0.00",None]
+        fmts = [None,None,None,None,"#,##0.00","#,##0.00","#,##0.00","#,##0.00","0.0%","#,##0.00",None]
         for c_idx, (val, fmt) in enumerate(zip(vals, fmts), 1):
             cell = ws_wl.cell(row=r_idx, column=c_idx, value=val)
-            style_cell(cell, status_bg if c_idx == 9 else bg, fmt=fmt,
+            style_cell(cell, status_bg if c_idx == 11 else bg, fmt=fmt,
                        bold=(c_idx == 9),
                        align="right" if c_idx in (5,6,7,8) else "center" if c_idx == 9 else "left")
         r_idx += 1
