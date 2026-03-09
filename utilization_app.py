@@ -50,7 +50,9 @@ EMPLOYEE_LOCATION = {
     "Arestarkhov, Yaroslav":  "Czech Republic",
     "Carpen, Anamaria":       "Spain",
     "Centinaje, Rhodechild":  "Manila (PH)",
-    "Cooke, Ellen":           "Northern Ireland",
+    "Dolha, Madalina":         "Faroe Islands",
+    "Dolha":                    "Faroe Islands",
+    "Cooke, Ellen":             "Northern Ireland",
     "Cruz, Daniel":           "Manila (PH)",
     "DiMarco, Nicole R":      "USA",
     "Gardner, Cheryll L":     "USA",
@@ -246,12 +248,18 @@ def assign_credits(df, scope_map):
             loc = str(row.get("region","")).strip()
             if loc: return loc
             emp = str(row.get("employee","")).strip()
-            # Try exact match first, then prefix match
-            if emp in EMPLOYEE_LOCATION:
-                return EMPLOYEE_LOCATION[emp]
+            # Normalize: strip extra spaces, try exact → prefix → last-name match
+            emp_n = " ".join(emp.split())
+            if emp_n in EMPLOYEE_LOCATION:
+                return EMPLOYEE_LOCATION[emp_n]
+            emp_lower = emp_n.lower()
             for key, val in EMPLOYEE_LOCATION.items():
-                if emp.lower().startswith(key.lower()) or key.lower().startswith(emp.lower()):
-                    return val
+                key_lower = key.lower()
+                if emp_lower == key_lower: return val
+                if emp_lower.startswith(key_lower) or key_lower.startswith(emp_lower): return val
+                # last name only match (before the comma)
+                last = key_lower.split(",")[0].strip()
+                if emp_lower.startswith(last): return val
             return ""
         df["region"] = df.apply(_resolve_location, axis=1)
 
