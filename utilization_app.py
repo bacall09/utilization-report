@@ -363,7 +363,21 @@ def assign_credits(df, scope_map):
     df["previous_htd"] = df["htd_start"] + df["hours"]
 
     # Tag FF tasks
-    df["ff_task"] = df["task"].apply(match_ff_task) if "task" in df.columns else None
+    # ff_task — use task col; if blank try case_task_event
+    if "task" in df.columns:
+        _task_src = df["task"].fillna("")
+        if "case_task_event" in df.columns:
+            _task_src = _task_src.where(_task_src.str.strip() != "",
+                                        df["case_task_event"].fillna(""))
+        df["ff_task"] = _task_src.apply(match_ff_task)
+        df["task"] = df["task"].fillna("").where(
+            df["task"].fillna("").str.strip() != "",
+            df.get("case_task_event", pd.Series("", index=df.index)).fillna(""))
+    elif "case_task_event" in df.columns:
+        df["task"] = df["case_task_event"].fillna("")
+        df["ff_task"] = df["task"].apply(match_ff_task)
+    else:
+        df["ff_task"] = None
 
     # Collect skipped rows for reporting
     skipped_df = df[df["credit_tag"] == "SKIPPED"][
@@ -464,9 +478,12 @@ def build_excel(df, scope_map, consumed):
 
     # PTO hours per employee+period
     _pto_lookup = {}
-    if "task" in df.columns or "case_task_event" in df.columns:
-        _task_col = "task" if "task" in df.columns else "case_task_event"
-        _pto_mask = df[_task_col].fillna("").str.lower().apply(
+    _pto_task_col = None
+    for _tc in ["task", "case_task_event"]:
+        if _tc in df.columns and not df[_tc].fillna("").str.strip().eq("").all():
+            _pto_task_col = _tc; break
+    if _pto_task_col:
+        _pto_mask = df[_pto_task_col].fillna("").str.lower().apply(
             lambda t: any(k in t for k in PTO_KEYWORDS))
         _pto_df = df[_pto_mask].groupby(["employee","period"])["hours"].sum()
         _pto_lookup = {(emp, per): hrs for (emp, per), hrs in _pto_df.items()}
@@ -575,10 +592,11 @@ def build_excel(df, scope_map, consumed):
         # Burn % = htd_start / scoped hrs (htd_start includes this period)
         burn = seed / scope_h if scope_h > 0 else 0
 
-        vari_h  = row["variance_hrs"]
-        if vari_h > 0 or burn > 1:  status = "OVERRUN"
-        elif burn >= 0.9:            status = "REVIEW"
-        elif burn > 0:               status = "ON TRACK"
+        vari_h   = row["variance_hrs"]
+        htd_total = previous_h + row["hours_this_period"]
+        if scope_h > 0 and htd_total > scope_h: status = "OVERRUN"
+        elif burn >= 0.9:                        status = "REVIEW"
+        elif burn > 0:                           status = "ON TRACK"
         else:                        status = "—"
 
         status_bg = {"OVERRUN":"FDECED","REVIEW":"FEF9E7","ON TRACK":"EAF9F1"}.get(status, LTGRAY)
@@ -593,7 +611,7 @@ def build_excel(df, scope_map, consumed):
         vals = [row["project"], ptype, cust_reg, pm_name, scope_h or "—", previous_h,
                 row["hours_this_period"], row["credit_hrs"], vari_h,
                 previous_h + row["hours_this_period"],
-                scope_h - (previous_h + row["hours_this_period"]) if scope_h > 0 else "—",
+                (previous_h + row["hours_this_period"]) - scope_h if scope_h > 0 else "—",
                 burn if scope_h > 0 else "—", status]
         fmts = [None,None,None,None,None,"DD-MMM-YYYY",None,"#,##0.00","#,##0.00","#,##0.00","#,##0.00","#,##0.00","#,##0.00","#,##0.00","0.0%",None]
 
@@ -1071,7 +1089,7 @@ def build_excel(df, scope_map, consumed):
 
     # Filter to OVERRUN + AT RISK, sort by burn desc
     watchlist = wl_df[wl_df["status"].isin(["OVERRUN","REVIEW"])].sort_values(
-        "burn_pct", ascending=False).head(25)
+        ["status","burn_pct"], ascending=[True,False])
 
     r_idx = 3
     for _, row in watchlist.iterrows():
@@ -1308,7 +1326,7 @@ def build_excel(df, scope_map, consumed):
     # Low utilization employees
     dash_section(ws_dash, 21, 2, "EMPLOYEES BELOW 60% UTILIZATION — Action Required", ncols=6)
     ws_dash.row_dimensions[21].height = 22
-    for ci, hdr in enumerate(["Employee","Location","PS Region","Period","Util %","Credit Hrs"], 2):
+    for ci, hdr in enumerate(["Employee","Location","PS Region","Period","Util %","Credit Hrs","Notes"], 2):
         _c = ws_dash.cell(row=22, column=ci, value=hdr)
         _c.font = Font(name="Manrope", size=9, bold=True, color="FFFFFF")
         _c.fill = hdr_fill(TEAL)
@@ -1325,10 +1343,12 @@ def build_excel(df, scope_map, consumed):
         _avl3  = get_avail_hours(_loc3, _p3) or 0
         _util3 = _erow["credit_hrs"] / _avl3 if _avl3 > 0 else 0
         if _util3 < 0.60 and _avl3 > 0:
-            _low_rows.append((_emp3, _loc3, _ps3, _p3, _util3, _erow["credit_hrs"]))
+            _pto3 = _pto_lookup.get((_emp3, _p3), 0)
+            _note3 = f"⚠ {_pto3:.2f} hrs Vacation/PTO/Sick" if _pto3 > 0 else ""
+            _low_rows.append((_emp3, _loc3, _ps3, _p3, _util3, _erow["credit_hrs"], _note3))
 
-    for ri, (_e,_l,_ps,_per,_u,_c) in enumerate(sorted(_low_rows, key=lambda x:x[4])[:15], 23):
-        for ci2, (val2,fmt2) in enumerate([(_e,None),(_l,None),(_ps,None),(_per,None),(_u,"0.0%"),(_c,"#,##0.00")], 2):
+    for ri, (_e,_l,_ps,_per,_u,_c,_n) in enumerate(sorted(_low_rows, key=lambda x:x[4])[:15], 23):
+        for ci2, (val2,fmt2) in enumerate([(_e,None),(_l,None),(_ps,None),(_per,None),(_u,"0.0%"),(_c,"#,##0.00"),(_n,None)], 2):
             _cv = ws_dash.cell(row=ri, column=ci2, value=val2)
             _cv.font  = Font(name="Manrope", size=10, color="E74C3C" if ci2==6 else "000000")
             _cv.fill  = PatternFill("solid", fgColor="FDECED")
