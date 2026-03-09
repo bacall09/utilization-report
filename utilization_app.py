@@ -45,6 +45,44 @@ TAG_BADGE = {
 # ── Employees excluded from utilization targets ──────────────────────────────
 UTIL_EXEMPT_EMPLOYEES = ["swanson"]  # case-insensitive match
 
+# ── Employee → Location lookup (drives avail hours + PS region) ──────────────
+EMPLOYEE_LOCATION = {
+    "Arestarkhov, Yaroslav":  "Czech Republic",
+    "Carpen, Anamaria":       "Spain",
+    "Centinaje, Rhodechild":  "Manila (PH)",
+    "Cooke, Ellen":           "Northern Ireland",
+    "Cruz, Daniel":           "Manila (PH)",
+    "DiMarco, Nicole R":      "USA",
+    "Gardner, Cheryll L":     "USA",
+    "Hopkins, Chris":         "USA",
+    "Ickler, Georganne":      "USA",
+    "Isberg, Eric":           "USA",
+    "Jordanova, Marija":      "North Macedonia",
+    "Lappin, Thomas":         "Northern Ireland",
+    "Longalong, Santiago":    "Manila (PH)",
+    "Mohammad, Manaan":       "Canada",
+    "Morris, Lisa":           "Sydney (NSW)",
+    "Pallone, Daniel":        "Sydney (NSW)",
+    "NAQVI, SYED":            "Canada",
+    "Raykova, Silvia":        "Netherlands",
+    "Selvakumar, Sajithan":   "Canada",
+    "Snee, Stefanie J":       "USA",
+    "Stone, Matt":            "USA",
+    "Tuazon, Carol":          "Manila (PH)",
+    "Zoric, Ivan":            "Serbia",
+    "Murphy, Conor":          "USA",
+    "Bell, Stuart":           "USA",
+    "Cloete":                 "South Africa",  # location TBD — flagged
+    "Hamilton C":             "USA",           # location TBD — flagged
+    "Swanson":                "USA",           # util-exempt
+}
+
+# ── PS Region overrides (employee name → region, bypasses location mapping) ──
+PS_REGION_OVERRIDE = {
+    "NAQVI, SYED":  "EMEA",  # Canada-based but reports into EMEA
+    "Cruz, Daniel": "NOAM",  # Manila-based but reports into NOAM
+}
+
 PS_REGION_MAP = {
     "Sydney (NSW)":     "APAC",
     "Manila (PH)":      "APAC",
@@ -200,11 +238,32 @@ def assign_credits(df, scope_map):
     df["hours"]  = pd.to_numeric(df["hours"], errors="coerce").fillna(0)
     df["date"]   = pd.to_datetime(df["date"], errors="coerce")
     df["period"] = df["date"].dt.strftime("%Y-%m").fillna("Unknown")
-    # Map employee location → PS Region (APAC / EMEA / NOAM)
-    if "region" in df.columns:
-        df["ps_region"] = df["region"].map(PS_REGION_MAP).fillna("Other")
-    else:
-        df["ps_region"] = "Other"
+    # Backfill location from hardcoded lookup when column is missing or blank
+    if "region" not in df.columns:
+        df["region"] = ""
+    if "employee" in df.columns:
+        def _resolve_location(row):
+            loc = str(row.get("region","")).strip()
+            if loc: return loc
+            emp = str(row.get("employee","")).strip()
+            # Try exact match first, then prefix match
+            if emp in EMPLOYEE_LOCATION:
+                return EMPLOYEE_LOCATION[emp]
+            for key, val in EMPLOYEE_LOCATION.items():
+                if emp.lower().startswith(key.lower()) or key.lower().startswith(emp.lower()):
+                    return val
+            return ""
+        df["region"] = df.apply(_resolve_location, axis=1)
+
+    # Map employee location → PS Region, with per-employee overrides
+    def _resolve_ps_region(row):
+        emp = str(row.get("employee","")).strip()
+        # Check override first
+        for key in PS_REGION_OVERRIDE:
+            if emp.lower().startswith(key.lower()) or key.lower() == emp.lower():
+                return PS_REGION_OVERRIDE[key]
+        return PS_REGION_MAP.get(str(row.get("region","")).strip(), "Other")
+    df["ps_region"] = df.apply(_resolve_ps_region, axis=1)
 
     consumed = {}
     credit_hrs_list    = []
@@ -1298,6 +1357,25 @@ def main():
                 st.error(f"Processing error: {e}"); return
 
         st.success("✅ Processing complete!")
+
+        # ── Warn on unmapped employees ────────────────────────
+        _unmapped = []
+        for _emp in df["employee"].dropna().unique():
+            _emp_s = str(_emp).strip()
+            _loc = df[df["employee"]==_emp]["region"].iloc[0] if len(df[df["employee"]==_emp]) > 0 else ""
+            _matched = any(
+                _emp_s.lower().startswith(k.lower()) or k.lower().startswith(_emp_s.lower())
+                for k in EMPLOYEE_LOCATION
+            )
+            if not _matched and not str(_loc).strip():
+                _unmapped.append(_emp_s)
+        if _unmapped:
+            st.warning(
+                f"⚠️ **{len(_unmapped)} employee(s) have no location defined** — "
+                f"avail hours and PS region will show as Unknown. "
+                f"Add them to EMPLOYEE_LOCATION in the app config.\n\n"
+                + ", ".join(sorted(_unmapped))
+            )
 
         # Metrics
         total_rows     = len(df[df["credit_tag"] != "SKIPPED"])
