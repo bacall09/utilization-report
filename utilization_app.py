@@ -1013,7 +1013,7 @@ def build_excel(df, scope_map, consumed):
         ("Util % (target 70%)", util_pct_d, "0.0%", util_status_d),
         ("FF Overrun Hrs", overrun_hrs_d, "#,##0.00", None),
         ("Admin Hrs", admin_hrs_d, "#,##0.00", None),
-        ("Projects This Period", df[df["credit_tag"] != "SKIPPED"]["project"].nunique(), "#,##0", None),
+        ("Projects This Period", df[df["credit_tag"] != "SKIPPED"].groupby(["project","project_type"]).ngroups, "#,##0", None),
     ]):
         col = 2 + i
         dash_label(ws_dash, 7, col, label)
@@ -1264,7 +1264,7 @@ def main():
             return f"<div style='font-size:14px;color:#a0a0a0;font-family:Manrope,sans-serif;margin-bottom:4px'>{label}</div><div style='font-size:36px;font-weight:700;color:var(--text-color,#1a1a1a);font-family:Manrope,sans-serif;line-height:1.1'>{value}</div>{pill}"
 
         m1,m2,m3,m4,m5 = st.columns(5)
-        with m1: st.markdown(metric_card("Projects This Period",   f"{df[df['credit_tag'] != 'SKIPPED']['project'].nunique():,}"), unsafe_allow_html=True)
+        with m1: st.markdown(metric_card("Projects This Period",   f"{df[df['credit_tag'] != 'SKIPPED'].groupby(['project','project_type']).ngroups:,}"), unsafe_allow_html=True)
         with m2: st.markdown(metric_card("Hours This Period",      f"{hours_this_period:,.1f}"), unsafe_allow_html=True)
         with m3: st.markdown(metric_card("Utilization Credits",    f"{total_credit:,.1f}",    f"{credit_pct:.1%} of total hrs · {credit_label}", credit_color), unsafe_allow_html=True)
         with m4: st.markdown(metric_card("FF Project Overrun Hrs", f"{total_proj_overrun:,.1f}", f"{overrun_pct:.1%} of total hrs", "#ff4b4b"), unsafe_allow_html=True)
