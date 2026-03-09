@@ -418,7 +418,7 @@ def build_excel(df, scope_map, consumed):
     pw = [35,20,18,20,12,15,15,12,18,18,10,12]
     write_title(ws3, "SUMMARY — Utilization by Project", len(ph))
     style_header(ws3, 2, ph, TEAL)
-    ws3.auto_filter.ref = "A2:K2"
+    ws3.auto_filter.ref = "A2:L2"
 
     for i, w in enumerate(pw, 1):
         ws3.column_dimensions[get_column_letter(i)].width = w
@@ -530,7 +530,7 @@ def build_excel(df, scope_map, consumed):
                     (_task_hrs, "#,##0.00"), ("", None)], 1):
                     hcell = ws5.cell(row=r_idx, column=ci, value=hval)
                     hcell.font  = Font(name="Manrope", size=10, bold=True, color="FFFFFF")
-                    hcell.fill  = PatternFill("solid", fgColor=NAVY if ci==1 else "D6DCF0")
+                    hcell.fill  = PatternFill("solid", fgColor=NAVY)
                     hcell.border = thin_border()
                     hcell.alignment = Alignment(
                         horizontal="right" if ci==4 else "left", vertical="center")
@@ -599,7 +599,7 @@ def build_excel(df, scope_map, consumed):
                     (_task_total_hrs, "#,##0.00"), ("", None), ("", None)], 1):
                     hcell = ws6.cell(row=r_idx_t, column=ci, value=hval)
                     hcell.font  = Font(name="Manrope", size=10, bold=True, color="FFFFFF")
-                    hcell.fill  = PatternFill("solid", fgColor=NAVY if ci<=2 else "D6DCF0")
+                    hcell.fill  = PatternFill("solid", fgColor=NAVY)
                     hcell.border = thin_border()
                     hcell.alignment = Alignment(
                         horizontal="right" if ci==3 else "left", vertical="center")
@@ -1013,7 +1013,7 @@ def build_excel(df, scope_map, consumed):
         ("Util % (target 70%)", util_pct_d, "0.0%", util_status_d),
         ("FF Overrun Hrs", overrun_hrs_d, "#,##0.00", None),
         ("Admin Hrs", admin_hrs_d, "#,##0.00", None),
-        ("Projects This Period", df[df["credit_tag"] != "SKIPPED"].groupby(["project","project_type"]).ngroups, "#,##0", None),
+        ("Projects This Period", df[df["billing_type"].fillna("").str.lower() != "internal"].groupby(["project","project_type"]).ngroups, "#,##0", None),
     ]):
         col = 2 + i
         dash_label(ws_dash, 7, col, label)
@@ -1170,9 +1170,21 @@ def main():
     st.markdown("""<style>
     :root { --text-color: #111111; }
     @media (prefers-color-scheme: dark) { :root { --text-color: #ffffff; } }
-    [data-theme="dark"] { --text-color: #ffffff; }
-    [data-theme="light"] { --text-color: #111111; }
-    </style>""", unsafe_allow_html=True)
+    [data-theme="dark"], [data-theme="dark"] * { --text-color: #ffffff; }
+    [data-theme="light"], [data-theme="light"] * { --text-color: #111111; }
+    /* Streamlit dark mode body class fallback */
+    .stApp[data-theme="dark"] { --text-color: #ffffff; }
+    </style>
+    <script>
+    function fixMetricColors() {
+        const theme = document.documentElement.getAttribute('data-theme') ||
+                      (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+        const color = theme === 'dark' ? '#ffffff' : '#111111';
+        document.documentElement.style.setProperty('--text-color', color);
+    }
+    fixMetricColors();
+    new MutationObserver(fixMetricColors).observe(document.documentElement, {attributes: true});
+    </script>""", unsafe_allow_html=True)
 
     # ── Upload ────────────────────────────────────────────────
     st.subheader("Step 1 — Upload NetSuite Time Detail Export")
@@ -1264,7 +1276,7 @@ def main():
             return f"<div style='font-size:14px;color:#a0a0a0;font-family:Manrope,sans-serif;margin-bottom:4px'>{label}</div><div style='font-size:36px;font-weight:700;color:var(--text-color,#1a1a1a);font-family:Manrope,sans-serif;line-height:1.1'>{value}</div>{pill}"
 
         m1,m2,m3,m4,m5 = st.columns(5)
-        with m1: st.markdown(metric_card("Projects This Period",   f"{df[df['credit_tag'] != 'SKIPPED'].groupby(['project','project_type']).ngroups:,}"), unsafe_allow_html=True)
+        with m1: st.markdown(metric_card("Projects This Period",   f"{df[df['billing_type'].fillna('').str.lower() != 'internal'].groupby(['project','project_type']).ngroups:,}"), unsafe_allow_html=True)
         with m2: st.markdown(metric_card("Hours This Period",      f"{hours_this_period:,.1f}"), unsafe_allow_html=True)
         with m3: st.markdown(metric_card("Utilization Credits",    f"{total_credit:,.1f}",    f"{credit_pct:.1%} of total hrs · {credit_label}", credit_color), unsafe_allow_html=True)
         with m4: st.markdown(metric_card("FF Project Overrun Hrs", f"{total_proj_overrun:,.1f}", f"{overrun_pct:.1%} of total hrs", "#ff4b4b"), unsafe_allow_html=True)
