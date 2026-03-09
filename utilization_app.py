@@ -498,7 +498,7 @@ def build_excel(df, scope_map, consumed):
 
     ph = ["Project","Project Type","Customer Region","Project Manager",
           "Scoped Hrs","Previous Hrs to Date","Hours This Period","Credit Hrs",
-          "FF Project Overrun Hrs","Hours to Date","Total FF Overrun Hrs","Burn %","Status"]
+          "FF Project Overrun Hrs","Hours to Date","Hours Balance","Burn %","Status"]
     pw = [35,20,18,20,12,15,15,12,18,18,20,10,12]
     write_title(ws3, "SUMMARY — Utilization by Project", len(ph))
     style_header(ws3, 2, ph, TEAL)
@@ -562,7 +562,7 @@ def build_excel(df, scope_map, consumed):
         vals = [row["project"], ptype, cust_reg, pm_name, scope_h or "—", previous_h,
                 row["hours_this_period"], row["credit_hrs"], vari_h,
                 previous_h + row["hours_this_period"],
-                (previous_h + row["hours_this_period"]) - scope_h if scope_h > 0 else "—",
+                scope_h - (previous_h + row["hours_this_period"]) if scope_h > 0 else "—",
                 burn if scope_h > 0 else "—", status]
         fmts = [None,None,None,None,"#,##0.00","#,##0.00","#,##0.00","#,##0.00","#,##0.00","#,##0.00","#,##0.00","0.0%",None]
 
@@ -1005,7 +1005,7 @@ def build_excel(df, scope_map, consumed):
 
     # Section A: Top 10 overrun projects
     wlh = ["Project","Project Type","Customer Region","Project Manager",
-           "Scoped Hrs","Previous Hrs to Date","Hours to Date","Total FF Overrun Hrs","Burn %","FF Overrun Hrs","Status"]
+           "Scoped Hrs","Previous Hrs to Date","Hours to Date","Hours Balance","Burn %","FF Overrun Hrs","Status"]
     wlw = [35,20,18,20,12,18,14,20,10,14,12]
     write_title(ws_wl, "PROJECT WATCH LIST — Overrun & At-Risk Projects", len(wlh))
     style_header(ws_wl, 2, wlh, "E74C3C")
@@ -1049,7 +1049,7 @@ def build_excel(df, scope_map, consumed):
         cust_reg = proj_cust_region.get(row["project"], "")
         pm_name  = proj_pm.get(row["project"], "")
         _htd_wl = row["previous_htd"] + row["hours_this_period"]
-        _tot_ov  = _htd_wl - row["scope_h"] if row["scope_h"] and row["scope_h"] > 0 else "—"
+        _tot_ov  = row["scope_h"] - _htd_wl if row["scope_h"] and row["scope_h"] > 0 else "—"
         vals = [row["project"], row["project_type"], cust_reg, pm_name,
                 row["scope_h"] or "—", row["previous_htd"],
                 _htd_wl, _tot_ov,
