@@ -1090,7 +1090,7 @@ def build_excel(df, scope_map, consumed):
     dash_section(ws_dash, 21, 2, "EMPLOYEES BELOW 60% UTILIZATION — Action Required", ncols=6)
     ws_dash.row_dimensions[21].height = 22
     for ci, hdr in enumerate(["Employee","Location","PS Region","Period","Util %","Credit Hrs"], 2):
-        _c = ws_dash.cell(row=21, column=ci, value=hdr)
+        _c = ws_dash.cell(row=22, column=ci, value=hdr)
         _c.font = Font(name="Manrope", size=9, bold=True, color="FFFFFF")
         _c.fill = hdr_fill(TEAL)
 
