@@ -285,7 +285,7 @@ def assign_credits(df, scope_map):
     df["htd_start"]     = htd_start_list
 
     # Updated hours to date = htd_start + total hours booked this period (credited + overrun)
-    df["updated_htd"] = df["htd_start"] + df["hours"]
+    df["previous_htd"] = df["htd_start"] + df["hours"]
 
     # Tag FF tasks
     df["ff_task"] = df["task"].apply(match_ff_task) if "task" in df.columns else None
@@ -313,12 +313,12 @@ def build_excel(df, scope_map, consumed):
     headers = ["Employee","Location","Customer Region","Project Manager","Project",
                "Project Type","Billing Type","Hrs to Date","Date","Hours Logged",
                "Approval","Task/Case","Non-Billable","Credit Hrs","Variance Hrs",
-               "Updated Hrs to Date","Credit Tag","Period","Notes"]
+               "Previous Hrs to Date","Credit Tag","Period","Notes"]
     widths  = [20,16,18,20,35,20,14,13,14,13,14,25,13,12,12,18,16,12,45]
     cols    = ["employee","region","customer_region","project_manager","project",
                "project_type","billing_type","hours_to_date","date","hours",
                "approval","task","non_billable","credit_hrs","variance_hrs",
-               "updated_htd","credit_tag","period","notes"]
+               "previous_htd","credit_tag","period","notes"]
 
     write_title(ws, "PROCESSED DATA — Utilization Credit Detail", len(headers))
     style_header(ws, 2, headers, TEAL)
@@ -334,7 +334,7 @@ def build_excel(df, scope_map, consumed):
             fmt, bold, align = None, False, "left"
             if col == "date" and pd.notna(val):
                 fmt = "YYYY-MM-DD"; align = "center"
-            elif col in ("hours","credit_hrs","variance_hrs","hours_to_date","updated_htd"):
+            elif col in ("hours","credit_hrs","variance_hrs","hours_to_date","previous_htd"):
                 fmt = "#,##0.00"; align = "right"
             elif col == "credit_tag":
                 bold = True; align = "center"
@@ -354,6 +354,8 @@ def build_excel(df, scope_map, consumed):
     ew = [22,16,12,12,15,18,18,14,10]
     write_title(ws2, "SUMMARY — Utilization by Employee", len(eh))
     style_header(ws2, 2, eh, TEAL)
+    ws2.auto_filter.ref = "A2:I2"
+
     for i, w in enumerate(ew, 1):
         ws2.column_dimensions[get_column_letter(i)].width = w
 
@@ -412,10 +414,12 @@ def build_excel(df, scope_map, consumed):
 
     ph = ["Project","Project Type","Customer Region","Project Manager",
           "Scoped Hrs","Hours to Date","Hours This Period","Credit Hrs",
-          "FF Project Overrun Hrs","Updated Hrs to Date","Burn %","Status"]
+          "FF Project Overrun Hrs","Previous Hrs to Date","Burn %","Status"]
     pw = [35,20,18,20,12,15,15,12,18,18,10,12]
     write_title(ws3, "SUMMARY — Utilization by Project", len(ph))
     style_header(ws3, 2, ph, TEAL)
+    ws3.auto_filter.ref = "A2:K2"
+
     for i, w in enumerate(pw, 1):
         ws3.column_dimensions[get_column_letter(i)].width = w
 
@@ -452,26 +456,27 @@ def build_excel(df, scope_map, consumed):
         scope_h = max(_pm, key=lambda x: len(x[0]))[1] if _pm else 0
 
         seed      = float(row["htd_start"]) if row["htd_start"] else 0
-        # Updated HTD = prior HTD seed + all hours booked this period
-        updated_h = seed + row["hours_this_period"]
+        # htd_start already includes hours this period (per NetSuite export)
+        # Previous HTD = htd_start minus hours booked this period
+        previous_h = seed - row["hours_this_period"]
 
-        # Burn % = updated HTD / scoped hrs (includes prior periods)
-        burn = updated_h / scope_h if scope_h > 0 else 0
+        # Burn % = htd_start / scoped hrs (htd_start includes this period)
+        burn = seed / scope_h if scope_h > 0 else 0
 
         vari_h  = row["variance_hrs"]
         if vari_h > 0 or burn > 1:  status = "OVERRUN"
-        elif burn >= 0.9:            status = "AT RISK"
+        elif burn >= 0.9:            status = "REVIEW"
         elif burn > 0:               status = "ON TRACK"
         else:                        status = "—"
 
-        status_bg = {"OVERRUN":"FDECED","AT RISK":"FEF9E7","ON TRACK":"EAF9F1"}.get(status, LTGRAY)
+        status_bg = {"OVERRUN":"FDECED","REVIEW":"FEF9E7","ON TRACK":"EAF9F1"}.get(status, LTGRAY)
         bg, _grp_idx_p = group_bg(ptype, _prev_ptype, _grp_idx_p)
         _prev_ptype = ptype
 
         cust_reg = proj_cust_region.get(row["project"], "")
         pm_name  = proj_pm.get(row["project"], "")
-        vals = [row["project"], ptype, cust_reg, pm_name, scope_h or "—", row["htd_start"],
-                row["hours_this_period"], row["credit_hrs"], vari_h, updated_h,
+        vals = [row["project"], ptype, cust_reg, pm_name, scope_h or "—", previous_h,
+                row["hours_this_period"], row["credit_hrs"], vari_h, seed,
                 burn if scope_h > 0 else "—", status]
         fmts = [None,None,None,None,"#,##0.00","#,##0.00","#,##0.00","#,##0.00","#,##0.00","#,##0.00","0.0%",None]
 
@@ -490,6 +495,8 @@ def build_excel(df, scope_map, consumed):
     znw = [35,22,12,12]
     write_title(ws5, "ZCO NON-BILLABLE — Hours by Employee by Activity", len(znh))
     style_header(ws5, 2, znh, TEAL)
+    ws5.auto_filter.ref = "A2:E2"
+
     for i, w in enumerate(znw, 1):
         ws5.column_dimensions[get_column_letter(i)].width = w
 
@@ -511,18 +518,35 @@ def build_excel(df, scope_map, consumed):
         ws5.cell(row=2, column=5).border = thin_border()
         ws5.column_dimensions["E"].width = 16
 
-        _prev_task_z = None; _grp_idx_z = 0
-        for r_idx, (_, row) in enumerate(zco_sum.iterrows(), 3):
-            bg, _grp_idx_z = group_bg(row.get("task",""), _prev_task_z, _grp_idx_z)
-            _prev_task_z = row.get("task","")
+        _prev_task_z = None; _grp_idx_z = 0; r_idx = 3
+        for _, row in zco_sum.iterrows():
+            task = row.get("task","")
+            # Navy section header when task changes
+            if task != _prev_task_z:
+                _task_hrs = zco_sum[zco_sum["task"]==task]["hours"].sum()
+                for ci, (hval, hfmt) in enumerate([
+                    (task, None), ("", None), ("", None),
+                    (_task_hrs, "#,##0.00"), ("", None)], 1):
+                    hcell = ws5.cell(row=r_idx, column=ci, value=hval)
+                    hcell.font  = Font(name="Manrope", size=10, bold=True, color="FFFFFF")
+                    hcell.fill  = PatternFill("solid", fgColor=NAVY if ci==1 else "D6DCF0")
+                    hcell.border = thin_border()
+                    hcell.alignment = Alignment(
+                        horizontal="right" if ci==4 else "left", vertical="center")
+                    if hfmt: hcell.number_format = hfmt
+                r_idx += 1
+                _prev_task_z = task
+                _grp_idx_z = 0
+            bg, _grp_idx_z = group_bg(task, task, _grp_idx_z)
             total_hrs  = emp_period_totals.get((row["employee"], row["period"]), 0)
             pct        = row["hours"] / total_hrs if total_hrs > 0 else 0
-            vals = [row.get("task",""), row["employee"], row["period"], row["hours"], pct]
+            vals = ["", row["employee"], row["period"], row["hours"], pct]
             fmts = [None, None, None, "#,##0.00", "0.0%"]
             for c_idx, (val, fmt) in enumerate(zip(vals, fmts), 1):
                 cell = ws5.cell(row=r_idx, column=c_idx, value=val)
                 style_cell(cell, bg, fmt=fmt,
                            align="right" if c_idx in (4,5) else "center" if c_idx == 3 else "left")
+            r_idx += 1
     else:
         ws5.cell(row=3, column=1, value="No Non-Billable (Internal) entries in this period.")
 
@@ -535,6 +559,8 @@ def build_excel(df, scope_map, consumed):
     taw = [28,25,16,18,16]
     write_title(ws6, "TASK ANALYSIS — Hours by Task › Project Type", len(tah))
     style_header(ws6, 2, tah, TEAL)
+    ws6.auto_filter.ref = "A2:E2"
+
     for i, w in enumerate(taw, 1):
         ws6.column_dimensions[get_column_letter(i)].width = w
 
@@ -556,32 +582,45 @@ def build_excel(df, scope_map, consumed):
         # Total hours per type for % calc
         type_totals = ff_df.groupby("project_type")["hours"].sum().to_dict()
 
-        _prev_task_t = None; _grp_idx_t = 0
-        for r_idx, (_, row) in enumerate(task_sum.iterrows(), 3):
+        _prev_task_t = None; _grp_idx_t = 0; r_idx_t = 3
+        for _, row in task_sum.iterrows():
+            ff_task = row["ff_task"]
             type_total = type_totals.get(row["project_type"], 0)
             pct        = row["hours"] / type_total if type_total > 0 else 0
             proj_cnt   = proj_count_by_type.get(row["project_type"], 1)
             raw_avg    = row["hours"] / proj_cnt if proj_cnt > 0 else 0
-            # Round to nearest .25
             avg_hrs    = round(raw_avg * 4) / 4
-            bg         = bgs[r_idx % 2]
-
+            # Navy section header when task changes
+            if ff_task != _prev_task_t:
+                _task_total_hrs = task_sum[task_sum["ff_task"]==ff_task]["hours"].sum()
+                for ci, (hval, hfmt) in enumerate([
+                    (ff_task, None), ("— ALL TYPES —", None),
+                    (_task_total_hrs, "#,##0.00"), ("", None), ("", None)], 1):
+                    hcell = ws6.cell(row=r_idx_t, column=ci, value=hval)
+                    hcell.font  = Font(name="Manrope", size=10, bold=True, color="FFFFFF")
+                    hcell.fill  = PatternFill("solid", fgColor=NAVY if ci<=2 else "D6DCF0")
+                    hcell.border = thin_border()
+                    hcell.alignment = Alignment(
+                        horizontal="right" if ci==3 else "left", vertical="center")
+                    if hfmt: hcell.number_format = hfmt
+                r_idx_t += 1
+                _prev_task_t = ff_task
+                _grp_idx_t = 0
             task_colors = {
                 "Configuration":        "EBF5FB",
                 "Enablement/Training":  "EAF9F1",
                 "Post Go-live Support": "FEF9E7",
                 "Project Management":   "F4ECF7",
             }
-            bg, _grp_idx_t = group_bg(row["ff_task"], _prev_task_t, _grp_idx_t)
-            _prev_task_t = row["ff_task"]
-            task_bg = task_colors.get(row["ff_task"], bg)
-
-            vals = [row["ff_task"], row["project_type"], row["hours"], avg_hrs, pct]
+            bg, _grp_idx_t = group_bg(ff_task, ff_task, _grp_idx_t)
+            task_bg = task_colors.get(ff_task, bg)
+            vals = ["", row["project_type"], row["hours"], avg_hrs, pct]
             fmts = [None, None, "#,##0.00", "#,##0.00", "0.0%"]
             for c_idx, (val, fmt) in enumerate(zip(vals, fmts), 1):
-                cell = ws6.cell(row=r_idx, column=c_idx, value=val)
-                style_cell(cell, task_bg if c_idx == 1 else bg, fmt=fmt,
-                           align="right" if c_idx in (3,4,5) else "left")
+                cell = ws6.cell(row=r_idx_t, column=c_idx, value=val)
+                style_cell(cell, task_bg if c_idx > 1 else bg, fmt=fmt,
+                           align="right" if c_idx > 2 else "left")
+            r_idx_t += 1
     else:
         ws6.cell(row=3, column=1, value="No Fixed Fee task data found. Check Billing Type and Task/Case columns.")
 
@@ -594,6 +633,8 @@ def build_excel(df, scope_map, consumed):
     pcw = [35, 14, 14]
     write_title(ws_pc, "PROJECT COUNT — Distinct Projects by Type (excl. Internal)", len(pch))
     style_header(ws_pc, 2, pch, TEAL)
+    ws_pc.auto_filter.ref = "A2:D2"
+
     for i, w in enumerate(pcw, 1):
         ws_pc.column_dimensions[get_column_letter(i)].width = w
 
@@ -639,6 +680,8 @@ def build_excel(df, scope_map, consumed):
     crw = [22,16,18,20,10]
     write_title(ws_cr, "SUMMARY — Utilization by Customer Region", len(crh))
     style_header(ws_cr, 2, crh, TEAL)
+    ws_cr.auto_filter.ref = "A2:E2"
+
     for i, w in enumerate(crw, 1):
         ws_cr.column_dimensions[get_column_letter(i)].width = w
 
@@ -679,6 +722,8 @@ def build_excel(df, scope_map, consumed):
     psw = [14,28,14,12,16,18,20,14,10]
     write_title(ws_ps, "SUMMARY — Utilization by PS Region (APAC / EMEA / NOAM)", len(psh))
     style_header(ws_ps, 2, psh, TEAL)
+    ws_ps.auto_filter.ref = "A3:I3"
+
     # Sub-header note
     ws_ps.cell(row=3, column=1,
         value="Grouped by PS Region → Project Type → Billing Type").font = Font(
@@ -786,7 +831,7 @@ def build_excel(df, scope_map, consumed):
 
     # Section A: Top 10 overrun projects
     wlh = ["Project","Project Type","Customer Region","Project Manager",
-           "Scoped Hrs","Updated Hrs to Date","Burn %","FF Overrun Hrs","Status"]
+           "Scoped Hrs","Previous Hrs to Date","Burn %","FF Overrun Hrs","Status"]
     wlw = [35,20,18,20,12,18,10,14,12]
     write_title(ws_wl, "PROJECT WATCH LIST — Overrun & At-Risk Projects", len(wlh))
     style_header(ws_wl, 2, wlh, "E74C3C")
@@ -800,8 +845,8 @@ def build_excel(df, scope_map, consumed):
         variance_hrs=("variance_hrs","sum"),
         htd_start=("htd_start","first"),
     )
-    wl_df["updated_htd"] = wl_df.apply(
-        lambda r: (float(r["htd_start"]) if r["htd_start"] else 0) + r["hours_this_period"], axis=1)
+    wl_df["previous_htd"] = wl_df.apply(
+        lambda r: max(0, (float(r["htd_start"]) if r["htd_start"] else 0) - r["hours_this_period"]), axis=1)
 
     def get_scope(ptype):
         _pm = [(k, float(v)) for k, v in scope_map.items() if k.strip().lower() in str(ptype).strip().lower()]
@@ -809,14 +854,14 @@ def build_excel(df, scope_map, consumed):
 
     wl_df["scope_h"]  = wl_df["project_type"].apply(get_scope)
     wl_df["burn_pct"] = wl_df.apply(
-        lambda r: r["updated_htd"] / r["scope_h"] if r["scope_h"] > 0 else None, axis=1)
+        lambda r: (float(r["htd_start"]) if r["htd_start"] else 0) / r["scope_h"] if r["scope_h"] > 0 else None, axis=1)
     wl_df["status"] = wl_df.apply(
         lambda r: "OVERRUN" if (r["variance_hrs"] > 0 or (r["burn_pct"] or 0) > 1)
-        else "AT RISK" if (r["burn_pct"] or 0) >= 0.9
+        else "REVIEW" if (r["burn_pct"] or 0) >= 0.9
         else "ON TRACK", axis=1)
 
     # Filter to OVERRUN + AT RISK, sort by burn desc
-    watchlist = wl_df[wl_df["status"].isin(["OVERRUN","AT RISK"])].sort_values(
+    watchlist = wl_df[wl_df["status"].isin(["OVERRUN","REVIEW"])].sort_values(
         "burn_pct", ascending=False).head(25)
 
     r_idx = 3
@@ -828,7 +873,7 @@ def build_excel(df, scope_map, consumed):
         cust_reg = proj_cust_region.get(row["project"], "")
         pm_name  = proj_pm.get(row["project"], "")
         vals = [row["project"], row["project_type"], cust_reg, pm_name,
-                row["scope_h"] or "—", row["updated_htd"],
+                row["scope_h"] or "—", row["previous_htd"],
                 burn_val, row["variance_hrs"], status]
         fmts = [None,None,None,None,"#,##0.00","#,##0.00","0.0%","#,##0.00",None]
         for c_idx, (val, fmt) in enumerate(zip(vals, fmts), 1):
@@ -940,9 +985,16 @@ def build_excel(df, scope_map, consumed):
     sc = ws_dash.cell(row=3, column=2, value=f"Data through {date_str}")
     sc.font = Font(name="Manrope", size=10, color="808080")
     ws_dash.merge_cells(start_row=3, start_column=2, end_row=3, end_column=7)
+    kc = ws_dash.cell(row=4, column=2, value="This report calculates Utilization Credits from NetSuite time detail exports. T&M projects: full credit for all hours logged. Fixed Fee projects: credit up to scoped hours; hours beyond scope tracked as overrun (excluded from credits). Internal time: excluded from utilization, tracked as Admin Hours. Util % = Utilization Credits / Hours This Period.")
+    kc.font = Font(name="Manrope", size=9, italic=True, color="808080")
+    kc.alignment = Alignment(wrap_text=True)
+    ws_dash.merge_cells(start_row=4, start_column=2, end_row=4, end_column=7)
+    ws_dash.row_dimensions[4].height = 30
+    # Push all section starts down 1 row to accommodate key text
+
 
     # Key Metrics
-    dash_section(ws_dash, 5, 2, "KEY METRICS", ncols=6)
+    dash_section(ws_dash, 6, 2, "KEY METRICS", ncols=6)
     ws_dash.row_dimensions[5].height = 22
     hours_tp_d    = df[df["credit_tag"] != "SKIPPED"]["hours"].sum()
     credit_hrs_d  = df[df["credit_tag"].isin(["CREDITED","PARTIAL"])]["credit_hrs"].sum()
@@ -961,18 +1013,18 @@ def build_excel(df, scope_map, consumed):
         ("Rows Processed", total_rows_d, "#,##0", None),
     ]):
         col = 2 + i
-        dash_label(ws_dash, 6, col, label)
+        dash_label(ws_dash, 7, col, label)
         if status:
-            rag_cell(ws_dash, 7, col, value, fmt=fmt, status=status)
+            rag_cell(ws_dash, 8, col, value, fmt=fmt, status=status)
         else:
-            dash_value(ws_dash, 7, col, value, fmt=fmt, size=14)
-    ws_dash.row_dimensions[7].height = 28
+            dash_value(ws_dash, 8, col, value, fmt=fmt, size=14)
+    ws_dash.row_dimensions[8].height = 28
 
     # PS Region
-    dash_section(ws_dash, 9, 2, "UTILIZATION BY PS REGION", ncols=6)
+    dash_section(ws_dash, 10, 2, "UTILIZATION BY PS REGION", ncols=6)
     ws_dash.row_dimensions[9].height = 22
     for ci, hdr in enumerate(["PS Region","Hours This Period","Credit Hrs","Util %","FF Overrun Hrs","Admin Hrs"], 2):
-        c = ws_dash.cell(row=10, column=ci, value=hdr)
+        c = ws_dash.cell(row=11, column=ci, value=hdr)
         c.font = Font(name="Manrope", size=9, bold=True, color="FFFFFF")
         c.fill = hdr_fill(TEAL)
 
@@ -990,7 +1042,7 @@ def build_excel(df, scope_map, consumed):
                 _seen_emp_period.add((_emp2, _p2))
                 ps_avail_d[_ps2] = ps_avail_d.get(_ps2,0) + (get_avail_hours(_loc2,_p2) or 0)
 
-    for ri, reg in enumerate(["APAC","EMEA","NOAM","Other"], 11):
+    for ri, reg in enumerate(["APAC","EMEA","NOAM","Other"], 12):
         if reg not in ps_sum_d.index: continue
         _row = ps_sum_d.loc[reg]
         _adm = float(ps_admin_d.get(reg,0)) if reg in ps_admin_d.index else 0
@@ -1015,8 +1067,8 @@ def build_excel(df, scope_map, consumed):
             if fmt2: _c.number_format = fmt2
 
     # Watch List summary
-    dash_section(ws_dash, 16, 2, "WATCH LIST SUMMARY", ncols=6)
-    ws_dash.row_dimensions[16].height = 22
+    dash_section(ws_dash, 17, 2, "WATCH LIST SUMMARY", ncols=6)
+    ws_dash.row_dimensions[17].height = 22
     n_overrun  = len(df[df["credit_tag"]=="OVERRUN"]["project"].unique())
     _wl_at_risk = wl_df[(wl_df["burn_pct"].notna()) & (wl_df["burn_pct"]>=0.9) & (wl_df["status"]!="OVERRUN")] if "wl_df" in dir() else pd.DataFrame()
     n_at_risk  = len(_wl_at_risk["project"].unique()) if len(_wl_at_risk) > 0 else 0
@@ -1030,13 +1082,13 @@ def build_excel(df, scope_map, consumed):
         ("FF: No Scope Defined Hours", unconf_hrs_d, "#,##0.00", "yellow" if unconf_hrs_d>0 else "green"),
     ]):
         col = 2 + i
-        dash_label(ws_dash, 17, col, label)
-        rag_cell(ws_dash, 18, col, value, fmt=fmt, status=status)
-    ws_dash.row_dimensions[18].height = 28
+        dash_label(ws_dash, 18, col, label)
+        rag_cell(ws_dash, 19, col, value, fmt=fmt, status=status)
+    ws_dash.row_dimensions[19].height = 28
 
     # Low utilization employees
-    dash_section(ws_dash, 20, 2, "EMPLOYEES BELOW 60% UTILIZATION — Action Required", ncols=6)
-    ws_dash.row_dimensions[20].height = 22
+    dash_section(ws_dash, 21, 2, "EMPLOYEES BELOW 60% UTILIZATION — Action Required", ncols=6)
+    ws_dash.row_dimensions[21].height = 22
     for ci, hdr in enumerate(["Employee","Location","PS Region","Period","Util %","Credit Hrs"], 2):
         _c = ws_dash.cell(row=21, column=ci, value=hdr)
         _c.font = Font(name="Manrope", size=9, bold=True, color="FFFFFF")
@@ -1056,7 +1108,7 @@ def build_excel(df, scope_map, consumed):
         if _util3 < 0.60 and _avl3 > 0:
             _low_rows.append((_emp3, _loc3, _ps3, _p3, _util3, _erow["credit_hrs"]))
 
-    for ri, (_e,_l,_ps,_per,_u,_c) in enumerate(sorted(_low_rows, key=lambda x:x[4])[:15], 22):
+    for ri, (_e,_l,_ps,_per,_u,_c) in enumerate(sorted(_low_rows, key=lambda x:x[4])[:15], 23):
         for ci2, (val2,fmt2) in enumerate([(_e,None),(_l,None),(_ps,None),(_per,None),(_u,"0.0%"),(_c,"#,##0.00")], 2):
             _cv = ws_dash.cell(row=ri, column=ci2, value=val2)
             _cv.font  = Font(name="Manrope", size=10, color="E74C3C" if ci2==6 else "000000")
@@ -1105,10 +1157,19 @@ def main():
             <h1 style='color:white;margin:0;font-size:28px;font-family:Manrope,sans-serif'>Professional Services Utilization Credit Report</h1>
             <p style='color:#aac4d0;margin:6px 0 0 0;font-size:14px;font-family:Manrope,sans-serif'>
                 Upload your NetSuite time detail export to generate a utilization credit report.
-                &nbsp;|&nbsp; <a href="REPORT_LINK_PLACEHOLDER" style='color:#7da9f0;font-family:Manrope,sans-serif;'>Report Link</a>
+                &nbsp;|&nbsp; <a href="https://3838224.app.netsuite.com/app/common/search/searchresults.nl?searchid=66732&saverun=T&whence=" style='color:#7da9f0;font-family:Manrope,sans-serif;'>Report Link</a>
             </p>
+            <p style='color:#8ab0c0;margin:8px 0 0 0;font-size:12px;font-family:Manrope,sans-serif;line-height:1.6;'>This tool calculates <b>Utilization Credits</b> from NetSuite time detail exports. Credits are awarded as follows: <b>T&amp;M</b> projects receive full credit for all hours logged. <b>Fixed Fee</b> projects receive credit up to their scoped hours — hours beyond scope are tracked as overrun and excluded from credits. <b>Internal</b> time is excluded from utilization entirely and tracked separately as Admin Hours. Util&nbsp;% = Utilization Credits &divide; Hours This Period.</p>
         </div>
     """, unsafe_allow_html=True)
+
+    # ── Adaptive metric color CSS ────────────────────────────
+    st.markdown("""<style>
+    :root { --text-color: #111111; }
+    @media (prefers-color-scheme: dark) { :root { --text-color: #ffffff; } }
+    [data-theme="dark"] { --text-color: #ffffff; }
+    [data-theme="light"] { --text-color: #111111; }
+    </style>""", unsafe_allow_html=True)
 
     # ── Upload ────────────────────────────────────────────────
     st.subheader("Step 1 — Upload NetSuite Time Detail Export")
@@ -1198,10 +1259,10 @@ def main():
             pill = ""
             if pill_txt and pill_fg:
                 pill = f"<div style='display:inline-block;margin-top:6px;padding:2px 10px;border-radius:999px;background-color:{pill_fg}33;font-size:13px;font-family:Manrope,sans-serif;color:{pill_fg}'>&#8593; {pill_txt}</div>"
-            return f"<div style='font-size:14px;color:#a0a0a0;font-family:Manrope,sans-serif;margin-bottom:4px'>{label}</div><div style='font-size:36px;font-weight:700;color:#ffffff;font-family:Manrope,sans-serif;line-height:1.1'>{value}</div>{pill}"
+            return f"<div style='font-size:14px;color:#a0a0a0;font-family:Manrope,sans-serif;margin-bottom:4px'>{label}</div><div style='font-size:36px;font-weight:700;color:var(--text-color,#1a1a1a);font-family:Manrope,sans-serif;line-height:1.1'>{value}</div>{pill}"
 
         m1,m2,m3,m4,m5 = st.columns(5)
-        with m1: st.markdown(metric_card("Rows Processed",        f"{total_rows:,}"), unsafe_allow_html=True)
+        with m1: st.markdown(metric_card("Projects This Period",   f"{df[df['credit_tag'] != 'SKIPPED']['project'].nunique():,}"), unsafe_allow_html=True)
         with m2: st.markdown(metric_card("Hours This Period",      f"{hours_this_period:,.1f}"), unsafe_allow_html=True)
         with m3: st.markdown(metric_card("Utilization Credits",    f"{total_credit:,.1f}",    f"{credit_pct:.1%} of total hrs · {credit_label}", credit_color), unsafe_allow_html=True)
         with m4: st.markdown(metric_card("FF Project Overrun Hrs", f"{total_proj_overrun:,.1f}", f"{overrun_pct:.1%} of total hrs", "#ff4b4b"), unsafe_allow_html=True)
@@ -1268,7 +1329,7 @@ def main():
         with tab5:
             display_cols = ["employee","region","project","project_type","billing_type",
                             "hours_to_date","date","hours","credit_hrs","variance_hrs",
-                            "updated_htd","credit_tag","notes"]
+                            "previous_htd","credit_tag","notes"]
             existing = [c for c in display_cols if c in df.columns]
             st.dataframe(df[existing].head(100), use_container_width=True, hide_index=True)
             if len(df) > 100:
