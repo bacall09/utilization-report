@@ -426,12 +426,12 @@ def build_excel(df, scope_map, consumed):
     ws2.sheet_properties.tabColor = NAVY
     ws2.freeze_panes = "A3"
 
-    eh = ["Employee","Location","Period",
+    eh = ["Employee","Location","PS Region","Period",
           "Avail Hrs","Hours This Period","Utilization Credits","FF Project Overrun Hrs","Admin Hrs","Util %"]
-    ew = [22,16,12,12,15,18,18,14,10]
+    ew = [22,16,14,12,12,15,18,18,14,10]
     write_title(ws2, "SUMMARY — Utilization by Employee", len(eh))
     style_header(ws2, 2, eh, TEAL)
-    ws2.auto_filter.ref = "A2:I2"
+    ws2.auto_filter.ref = "A2:J2"
 
     for i, w in enumerate(ew, 1):
         ws2.column_dimensions[get_column_letter(i)].width = w
@@ -485,16 +485,18 @@ def build_excel(df, scope_map, consumed):
         _prev_emp = emp
         util_bg = ("EAF9F1" if util >= 0.8 else "FEF9E7" if util >= 0.6 else "FDECED")
 
-        vals = [emp, region, period, avail or "—",
+        _ps_reg = df[df["employee"]==emp]["ps_region"].iloc[0] \
+            if len(df[df["employee"]==emp]) > 0 else ""
+        vals = [emp, region, _ps_reg, period, avail or "—",
                 row["hours_this_period"], row["credit_hrs"],
                 row["ff_overrun_hrs"], row.get("admin_hrs", 0),
                 util if avail else "—"]
-        fmts = [None,None,None,"#,##0.00","#,##0.00","#,##0.00","#,##0.00","#,##0.00","0.0%"]
+        fmts = [None,None,None,None,"#,##0.00","#,##0.00","#,##0.00","#,##0.00","#,##0.00","0.0%"]
 
         for c_idx, (val, fmt) in enumerate(zip(vals, fmts), 1):
             cell = ws2.cell(row=r_idx, column=c_idx, value=val)
-            style_cell(cell, util_bg if c_idx == 9 else bg, fmt=fmt,
-                       align="right" if c_idx > 3 else "center" if c_idx == 3 else "left")
+            style_cell(cell, util_bg if c_idx == 10 else bg, fmt=fmt,
+                       align="right" if c_idx > 4 else "center" if c_idx == 4 else "left")
 
     # ── 3. PROJECT SUMMARY ────────────────────────────────────
     ws3 = wb.create_sheet("SUMMARY - By Project")
@@ -537,6 +539,9 @@ def build_excel(df, scope_map, consumed):
         proj_cust_region = df.dropna(subset=["customer_region"]).groupby("project")["customer_region"].first().to_dict()
     if "project_manager" in df.columns:
         proj_pm = df.dropna(subset=["project_manager"]).groupby("project")["project_manager"].first().to_dict()
+    # PS region per project — from first employee on that project
+    proj_ps_region = df.groupby("project")["ps_region"].first().to_dict() \
+        if "ps_region" in df.columns else {}
     proj_phase = {}
     if "project_phase" in df.columns:
         proj_phase = df.dropna(subset=["project_phase"]).groupby("project")["project_phase"].first().to_dict()
@@ -999,7 +1004,7 @@ def build_excel(df, scope_map, consumed):
             reg_vals = [ps_reg, "— ALL TYPES —", "",
                         _rv or "—", _rh, _rc, _ro, _ra,
                         _ru if _rh > 0 else "—"]
-            reg_fmts = [None,None,None,"#,##0.00","#,##0.00","#,##0.00","#,##0.00","#,##0.00","0.0%"]
+            reg_fmts = [None,None,None,None,"#,##0.00","#,##0.00","#,##0.00","#,##0.00","#,##0.00","0.0%"]
             for c_idx, (val, fmt) in enumerate(zip(reg_vals, reg_fmts), 1):
                 cell = ws_ps.cell(row=r_idx, column=c_idx, value=val)
                 cell.font  = Font(name="Manrope", size=10, bold=True,
@@ -1035,10 +1040,9 @@ def build_excel(df, scope_map, consumed):
     ws_wl.freeze_panes = "A3"
 
     # Section A: Top 10 overrun projects
-    wlh = ["Project","Project Type","Customer Region","Project Manager",
-           "Project Phase","Start Date","Days Active",
+    wlh = ["Project","Project Type","PS Region","Project Manager",
            "Scoped Hrs","Previous Hrs to Date","Hours to Date","Hours Balance","Burn %","FF Overrun Hrs","Status"]
-    wlw = [35,20,18,20,14,14,12,12,18,14,16,10,14,12]
+    wlw = [35,20,14,22,12,18,14,16,10,14,12]
     write_title(ws_wl, "PROJECT WATCH LIST — Overrun & At-Risk Projects", len(wlh))
     style_header(ws_wl, 2, wlh, "E74C3C")
     for i, w in enumerate(wlw, 1):
@@ -1083,20 +1087,17 @@ def build_excel(df, scope_map, consumed):
         phase      = proj_phase.get(row["project"], "")
         start_dt   = proj_start.get(row["project"])
         days_active = int((_as_of - start_dt).days) if pd.notna(start_dt) and pd.notna(_as_of) else "—"
-        _htd_wl    = row["previous_htd"] + row["hours_this_period"]
-        _tot_ov    = row["scope_h"] - _htd_wl if row["scope_h"] and row["scope_h"] > 0 else "—"
-        _phase_wl  = proj_phase.get(row["project"], "")
-        _start_wl  = proj_start.get(row["project"])
-        _days_wl   = int((_as_of - _start_wl).days) if pd.notna(_start_wl) and pd.notna(_as_of) else "—"
-        vals = [row["project"], row["project_type"], cust_reg, pm_name,
-                _phase_wl, _start_wl, _days_wl,
+        _htd_wl   = row["previous_htd"] + row["hours_this_period"]
+        _tot_ov   = _htd_wl - row["scope_h"] if row["scope_h"] and row["scope_h"] > 0 else "—"
+        _ps_reg_wl = proj_ps_region.get(row["project"], "")
+        vals = [row["project"], row["project_type"], _ps_reg_wl, pm_name,
                 row["scope_h"] or "—", row["previous_htd"],
                 _htd_wl, _tot_ov,
                 burn_val, row["variance_hrs"], status]
-        fmts = [None,None,None,None,None,"DD-MMM-YYYY",None,"#,##0.00","#,##0.00","#,##0.00","#,##0.00","0.0%","#,##0.00",None]
+        fmts = [None,None,None,None,"#,##0.00","#,##0.00","#,##0.00","#,##0.00","0.0%","#,##0.00",None]
         for c_idx, (val, fmt) in enumerate(zip(vals, fmts), 1):
             cell = ws_wl.cell(row=r_idx, column=c_idx, value=val)
-            style_cell(cell, status_bg if c_idx == 14 else bg, fmt=fmt,
+            style_cell(cell, status_bg if c_idx == 11 else bg, fmt=fmt,
                        bold=(c_idx == 9),
                        align="right" if c_idx in (5,6,7,8) else "center" if c_idx == 9 else "left")
         r_idx += 1
@@ -1287,7 +1288,9 @@ def build_excel(df, scope_map, consumed):
     # Watch List summary
     dash_section(ws_dash, 17, 2, "WATCH LIST SUMMARY", ncols=6)
     ws_dash.row_dimensions[17].height = 22
-    n_overrun  = len(df[df["credit_tag"]=="OVERRUN"]["project"].unique())
+    # Align with Watch List — count projects where HTD > scope
+    n_overrun  = len(wl_df[wl_df["status"]=="OVERRUN"]) if "wl_df" in dir() and len(wl_df) > 0 else \
+                 len(df[df["credit_tag"]=="OVERRUN"]["project"].unique())
     _wl_at_risk = wl_df[(wl_df["burn_pct"].notna()) & (wl_df["burn_pct"]>=0.9) & (wl_df["status"]!="OVERRUN")] if "wl_df" in dir() else pd.DataFrame()
     n_at_risk  = len(_wl_at_risk["project"].unique()) if len(_wl_at_risk) > 0 else 0
     n_unconf   = len(df[df["credit_tag"]=="UNCONFIGURED"]["project"].unique())
