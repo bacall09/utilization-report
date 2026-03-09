@@ -507,7 +507,7 @@ def build_excel(df, scope_map, consumed):
           "Scoped Hrs","Previous Hrs to Date","Hours This Period","Credit Hrs",
           "FF Project Overrun Hrs","Hours to Date","Hours Balance","Burn %","Status"]
     pw = [35,22,22,12,15,15,12,18,18,16,10,12]
-    write_title(ws3, "SUMMARY — Utilization by Project", len(ph))
+    write_title(ws3, "SUMMARY — Utilization by Project (Fixed Fee)", len(ph))
     style_header(ws3, 2, ph, TEAL)
     ws3.auto_filter.ref = "A2:L2"
 
@@ -579,12 +579,14 @@ def build_excel(df, scope_map, consumed):
 
         vari_h   = row["variance_hrs"]
         htd_total = previous_h + row["hours_this_period"]
-        if scope_h > 0 and htd_total > scope_h: status = "OVERRUN"
-        elif burn >= 0.9:                        status = "REVIEW"
-        elif burn > 0:                           status = "ON TRACK"
-        else:                        status = "—"
+        if scope_h > 0 and htd_total > scope_h:   status = "OVERRUN"
+        elif scope_h > 0 and htd_total == scope_h: status = "AT LIMIT"
+        elif scope_h == 0 and htd_total > 0:       status = "REVIEW"
+        elif burn >= 0.9:                          status = "REVIEW"
+        elif burn > 0:                             status = "ON TRACK"
+        else:                                      status = "—"
 
-        status_bg = {"OVERRUN":"FDECED","REVIEW":"FEF9E7","ON TRACK":"EAF9F1"}.get(status, LTGRAY)
+        status_bg = {"OVERRUN":"FDECED","AT LIMIT":"FDECED","REVIEW":"FEF9E7","ON TRACK":"EAF9F1"}.get(status, LTGRAY)
         bg, _grp_idx_p = group_bg(ptype, _prev_ptype, _grp_idx_p)
         _prev_ptype = ptype
 
@@ -881,7 +883,7 @@ def build_excel(df, scope_map, consumed):
         ws_pta.cell(row=4, column=1, value="No Fixed Fee task data available.")
 
 
-    ws_cr = wb.create_sheet("By Customer Region")
+    ws_cr = wb.create_sheet("By Customer Region (WIP)")
     ws_cr.sheet_properties.tabColor = "1e2c63"
     ws_cr.freeze_panes = "A3"
 
@@ -1067,13 +1069,18 @@ def build_excel(df, scope_map, consumed):
     wl_df["scope_h"]  = wl_df["project_type"].apply(get_scope)
     wl_df["burn_pct"] = wl_df.apply(
         lambda r: (float(r["htd_start"]) if r["htd_start"] else 0) / r["scope_h"] if r["scope_h"] > 0 else None, axis=1)
-    wl_df["status"] = wl_df.apply(
-        lambda r: "OVERRUN" if (r["variance_hrs"] > 0 or (r["burn_pct"] or 0) > 1)
-        else "REVIEW" if (r["burn_pct"] or 0) >= 0.9
-        else "ON TRACK", axis=1)
+    def _wl_status(r):
+        s_h = r["scope_h"] or 0
+        htd = (float(r["htd_start"]) if r["htd_start"] else 0)
+        if s_h > 0 and htd > s_h:   return "OVERRUN"
+        if s_h > 0 and htd == s_h:  return "AT LIMIT"
+        if s_h == 0 and htd > 0:    return "REVIEW"
+        if (r["burn_pct"] or 0) >= 0.9: return "REVIEW"
+        return "ON TRACK"
+    wl_df["status"] = wl_df.apply(_wl_status, axis=1)
 
     # Filter to OVERRUN + AT RISK, sort by burn desc
-    watchlist = wl_df[wl_df["status"].isin(["OVERRUN","REVIEW"])].sort_values(
+    watchlist = wl_df[wl_df["status"].isin(["OVERRUN","AT LIMIT","REVIEW"])].sort_values(
         ["status","burn_pct"], ascending=[True,False])
 
     r_idx = 3
@@ -1345,7 +1352,7 @@ def build_excel(df, scope_map, consumed):
         "Project Count",
         "SUMMARY - By Employee",
         "SUMMARY - By Project",
-        "By Customer Region",
+        "By Customer Region (WIP)",
         "By PS Region",
         "Watch List",
         "ZCO Non-Billable",
@@ -1443,17 +1450,7 @@ def main():
                 st.error(f"Processing error: {e}"); return
 
         st.success("✅ Processing complete!")
-        with st.expander("🔍 Debug: Column Detection", expanded=False):
-            _dbg_map, _ = auto_detect_columns(df_raw)
-            st.write("**Raw file columns:**", list(df_raw.columns))
-            st.write("**Detected mapping:**", _dbg_map)
-            _task_col_raw = next((c for c in df_raw.columns if c.lower().strip() == "case/task/event"), None)
-            st.write("**Task col in raw file:**", _task_col_raw)
-            if "task" in df.columns:
-                st.write("**Unique task values (first 15):**", df["task"].dropna().unique()[:15].tolist())
-                st.write("**Null task count:**", int(df["task"].isna().sum()))
-            else:
-                st.error("'task' column NOT found in processed df")
+
 
         # ── Warn on unmapped employees ────────────────────────
         _unmapped = []
