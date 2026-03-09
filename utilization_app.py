@@ -203,13 +203,13 @@ def auto_detect_columns(df):
         "date":          ["date", "time entry date", "entry date", "work date"],
         "hours":         ["hours", "duration", "hours logged", "time", "qty"],
         "approval":      ["approval status", "approval", "status"],
-        "task":          ["case/task/event", "task", "case", "event", "memo"],
+        "task":          ["case/task/event", "cask/task/event", "task", "case", "event", "memo"],
         "non_billable":  ["non-billable", "non billable", "nonbillable",
                           "non_billable", "is non billable"],
         "billing_type":  ["billing type", "billing_type", "bill type", "billtype"],
         "hours_to_date": ["hours to date", "hours_to_date", "htd", "prior hours",
                           "cumulative hours", "hours booked to date"],
-        "region":           ["location", "region", "country", "office"],
+        "region":           ["employee location", "location", "region", "country", "office"],
         "customer_region":  ["customer region", "customer_region", "cust region", "client region"],
         "project_manager":  ["project manager", "project_manager", "pm", "manager"],
         "project_phase":    ["project phase", "phase", "project_phase", "stage"],
@@ -501,14 +501,13 @@ def build_excel(df, scope_map, consumed):
     ws3.sheet_properties.tabColor = "E67E22"
     ws3.freeze_panes = "A3"
 
-    ph = ["Project","Project Type","Customer Region","Project Manager",
-          "Project Phase","Start Date","Days Active",
+    ph = ["Project","Project Type","Project Manager",
           "Scoped Hrs","Previous Hrs to Date","Hours This Period","Credit Hrs",
           "FF Project Overrun Hrs","Hours to Date","Hours Balance","Burn %","Status"]
-    pw = [35,20,18,20,14,14,12,12,15,15,12,18,18,16,10,12]
+    pw = [35,22,22,12,15,15,12,18,18,16,10,12]
     write_title(ws3, "SUMMARY — Utilization by Project", len(ph))
     style_header(ws3, 2, ph, TEAL)
-    ws3.auto_filter.ref = "A2:P2"
+    ws3.auto_filter.ref = "A2:L2"
 
     for i, w in enumerate(pw, 1):
         ws3.column_dimensions[get_column_letter(i)].width = w
@@ -589,18 +588,17 @@ def build_excel(df, scope_map, consumed):
         phase      = proj_phase.get(row["project"], "")
         start_dt   = proj_start.get(row["project"])
         days_active = int((_as_of - start_dt).days) if pd.notna(start_dt) and pd.notna(_as_of) else "—"
-        vals = [row["project"], ptype, cust_reg, pm_name,
-                phase, start_dt, days_active,
+        vals = [row["project"], ptype, pm_name,
                 scope_h or "—", previous_h,
                 row["hours_this_period"], row["credit_hrs"], vari_h,
                 previous_h + row["hours_this_period"],
                 (previous_h + row["hours_this_period"]) - scope_h if scope_h > 0 else "—",
                 burn if scope_h > 0 else "—", status]
-        fmts = [None,None,None,None,None,"DD-MMM-YYYY",None,"#,##0.00","#,##0.00","#,##0.00","#,##0.00","#,##0.00","#,##0.00","#,##0.00","0.0%",None]
+        fmts = [None,None,None,"#,##0.00","#,##0.00","#,##0.00","#,##0.00","#,##0.00","#,##0.00","#,##0.00","0.0%",None]
 
         for c_idx, (val, fmt) in enumerate(zip(vals, fmts), 1):
             cell = ws3.cell(row=r_idx, column=c_idx, value=val)
-            style_cell(cell, status_bg if c_idx == 16 else bg,
+            style_cell(cell, status_bg if c_idx == 12 else bg,
                        fmt=fmt, bold=(c_idx == 12),
                        align="right" if c_idx in (5,6,7,8,9,10,11) else "center" if c_idx == 12 else "left")
 
