@@ -499,7 +499,7 @@ def build_excel(df, scope_map, consumed):
                        align="right" if c_idx > 4 else "center" if c_idx == 4 else "left")
 
     # ── 3. PROJECT SUMMARY ────────────────────────────────────
-    ws3 = wb.create_sheet("SUMMARY - By Project")
+    ws3 = wb.create_sheet("FF By Project Utilization")
     ws3.sheet_properties.tabColor = "E67E22"
     ws3.freeze_panes = "A3"
 
@@ -1047,6 +1047,7 @@ def build_excel(df, scope_map, consumed):
     wlw = [35,20,14,22,12,18,14,16,10,14,12]
     write_title(ws_wl, "PROJECT WATCH LIST — Overrun & At-Risk Projects", len(wlh))
     style_header(ws_wl, 2, wlh, "E74C3C")
+    ws_wl.auto_filter.ref = f"A2:{get_column_letter(len(wlh))}2"
     for i, w in enumerate(wlw, 1):
         ws_wl.column_dimensions[get_column_letter(i)].width = w
 
@@ -1081,7 +1082,7 @@ def build_excel(df, scope_map, consumed):
 
     # Filter to OVERRUN + AT RISK, sort by burn desc
     watchlist = wl_df[wl_df["status"].isin(["OVERRUN","AT LIMIT","REVIEW"])].sort_values(
-        ["status","burn_pct"], ascending=[True,False])
+        "burn_pct", ascending=False, na_position="last")
 
     r_idx = 3
     for _, row in watchlist.iterrows():
@@ -1351,7 +1352,7 @@ def build_excel(df, scope_map, consumed):
         "Dashboard",
         "Project Count",
         "SUMMARY - By Employee",
-        "SUMMARY - By Project",
+        "FF By Project Utilization",
         "By Customer Region (WIP)",
         "By PS Region",
         "Watch List",
